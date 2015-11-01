@@ -1,0 +1,52 @@
+clusters:
+  - 1:
+    clusterNum: 1
+    clusterIp: 192.168.121.60
+
+    nsInstances:
+      - ipAddress: 192.168.121.50
+        user: nsroot
+        pass: nsroot
+      - ipAddress: 192.168.121.55
+        user: nsroot
+        pass: nsroot
+
+    serviceGroups:
+      - name: taiga_web
+        servers:
+        - ipAddress: 192.168.121.97
+          port: 80
+        - ipAddress: 192.168.121.129
+          port: 80
+        protocol: HTTP
+
+      - name: taiga_api
+        servers:
+        - ipAddress: 192.168.121.97
+          port: 8001
+        - ipAddress: 192.168.121.129
+          port: 8001
+        protocol: HTTP
+
+    lbvservers:
+      - name: taiga_web
+        vipAddress: 192.168.121.30
+        serviceGroupBinding: taiga_web
+      - name: taiga_api
+        vipAddress: 192.168.121.20
+        serviceGroupBinding: taiga_api
+
+
+    csvservers:
+      - name: taiga
+        vipAddress: 192.168.121.40
+        policyBinding:
+          - taiga_api
+        defaultLbvserver: taiga_web
+
+    policies:
+      cs:
+        - name: taiga_api
+          priority: 100
+          expression: "HTTP.REQ.URL.PATH.STARTSWITH(\"/api/\")"
+          action: taiga_api
