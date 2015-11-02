@@ -4,42 +4,47 @@ clusters:
     clusterIp: 192.168.121.60
 
     nsInstances:
-      - ipAddress: 192.168.121.50
+      - ip_address: 192.168.121.50
         user: nsroot
         pass: nsroot
-      - ipAddress: 192.168.121.55
+      - ip_address: 192.168.121.55
         user: nsroot
         pass: nsroot
 
     serviceGroups:
       - name: taiga_web
         servers:
-        - ipAddress: 192.168.121.97
+        - name: taiga_01
           port: 80
-        - ipAddress: 192.168.121.129
+        - name: taiga_02
           port: 80
         protocol: HTTP
-
       - name: taiga_api
         servers:
-        - ipAddress: 192.168.121.97
+        - name: taiga_01
           port: 8001
-        - ipAddress: 192.168.121.129
+        - name: taiga_02
           port: 8001
         protocol: HTTP
+
+    servers:
+      - name: taiga_01
+        ip_address: 192.168.121.229
+      - name: taiga_02
+        ip_address: 192.168.121.129
 
     lbvservers:
       - name: taiga_web
-        vipAddress: 192.168.121.30
+        vip_address: 192.168.121.30
         serviceGroupBinding: taiga_web
       - name: taiga_api
-        vipAddress: 192.168.121.20
+        vip_address: 192.168.121.20
         serviceGroupBinding: taiga_api
 
 
     csvservers:
       - name: taiga
-        vipAddress: 192.168.121.40
+        vip_address: 192.168.121.40
         policyBinding:
           - taiga_api
         defaultLbvserver: taiga_web
