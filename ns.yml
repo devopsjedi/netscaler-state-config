@@ -28,7 +28,7 @@ ns_groups:
       - name: taiga_02
         ip_address: 192.168.121.129
 
-    lbvservers:
+    lb_vservers:
       - name: taiga_web
         vip_address: 192.168.121.20
         port: 80
@@ -42,17 +42,19 @@ ns_groups:
         servicegroup_bindings:
           - taiga_api
 
-
-    csvservers:
+    cs_vservers:
       - name: taiga
         vip_address: 192.168.121.40
         policy_bindings:
           - taiga
         default_lbvserver: taiga_web
 
-    policies:
-      cs:
-        - name: taiga
-          priority: 100
-          expression: "HTTP.REQ.URL.PATH.STARTSWITH(\"/api/\")"
-          action: taiga_api
+    cs_policies:
+      - name: taiga
+        priority: 100
+        expression: "HTTP.REQ.URL.PATH.STARTSWITH(\"/api/\")"
+        action: taiga_api
+
+    cs_actions:
+      - name: taiga
+      - target_lbvserver: taiga_api

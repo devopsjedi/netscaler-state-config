@@ -13,6 +13,7 @@ from nsnitro.nsresources.nsservicegroup import NSServiceGroup
 from nsnitro.nsresources.nsservicegroupserverbinding import NSServiceGroupServerBinding
 from nsnitro.nsresources.nslbvserver import NSLBVServer
 from nsnitro.nsresources.nslbvserverservicegroupbinding import NSLBVServerServiceGroupBinding
+from nsnitro.nsresources.nsbaseresource import NSBaseResource
 #from nsnitro.nsresources.nssslvserversslcertkeybinding import NSSSLVServerSSLCertKeyBinding
 
 
@@ -46,9 +47,9 @@ def disconnect(nitro):
     return nitro
 
 
-def ensure_server_state(ns_instance, server_obj):
+def ensure_server_state(nitro, server_obj):
     ret = True
-    nitro = connect(ns_instance)
+    
     all_servers = NSServer.get_all(nitro)
     matches_found = {}
     for server in all_servers:
@@ -108,13 +109,13 @@ def ensure_server_state(ns_instance, server_obj):
                 log.debug('netscaler module error - NSServer.add() failed: {0}'.format(error))
                 ret = False
 
-    disconnect(nitro)
+    
     return ret
 
 
-def ensure_servicegroup_state(ns_instance, servicegroup_obj):
+def ensure_servicegroup_state(nitro, servicegroup_obj):
     ret = True
-    nitro = connect(ns_instance)
+    
     existing_servicegroup = NSServiceGroup()
 
     existing_servicegroup.set_servicegroupname(servicegroup_obj['name'])
@@ -152,47 +153,48 @@ def ensure_servicegroup_state(ns_instance, servicegroup_obj):
         log.debug('no existing servicegroup server bindings found for {}'.format(servicegroup_obj['name']))
         bindings = None
 
-    bindings_to_remove = []
-    for binding in bindings:
-        binding_found = False
+    if bindings != None:
+        bindings_to_remove = []
+        for binding in bindings:
+            binding_found = False
+            for server in servicegroup_obj['servers']:
+                if binding.get_servername() == server['name']:
+                    binding_found = True
+                    server['bound'] = True
+                    if binding.get_port() != server['port']:
+                        binding.set_port(server['port'])
+                        try:
+                            NSServiceGroupServerBinding.update(nitro, binding)
+                        except NSNitroError as error:
+                            log.debug('netscaler module error - NSServiceGroupServerBinding.update() failed: {0}'.format(error))
+                            ret = False
+            if not binding_found:
+                binding_to_remove = binding
+                try:
+                    NSServiceGroupServerBinding.delete(nitro, binding_to_remove)
+                except NSNitroError as error:
+                    log.debug('netscaler module error - NSServiceGroupServerBinding.remove() failed: {0}'.format(error))
+                    ret = False
+
+
         for server in servicegroup_obj['servers']:
-            if binding.get_servername() == server['name']:
-                binding_found = True
-                server['bound'] = True
-                if binding.get_port() != server['port']:
-                    binding.set_port(server['port'])
-                    try:
-                        NSServiceGroupServerBinding.update(nitro, binding)
-                    except NSNitroError as error:
-                        log.debug('netscaler module error - NSServiceGroupServerBinding.update() failed: {0}'.format(error))
-                        ret = False
-        if not binding_found:
-            binding_to_remove = binding
-            try:
-                NSServiceGroupServerBinding.delete(nitro, binding_to_remove)
-            except NSNitroError as error:
-                log.debug('netscaler module error - NSServiceGroupServerBinding.remove() failed: {0}'.format(error))
-                ret = False
+            if not server.has_key('bound'):
+                new_binding = NSServiceGroupServerBinding()
+                new_binding.set_servicegroupname(servicegroup_obj['name'])
+                new_binding.set_servername(server['name'])
+                new_binding.set_port(server['port'])
+                try:
+                    NSServiceGroupServerBinding.add(nitro, new_binding)
+                except NSNitroError as error:
+                    log.debug('netscaler module error - NSServiceGroupServerBinding.add() failed: {0}'.format(error))
+                    ret = False
 
-
-    for server in servicegroup_obj['servers']:
-        if not server.has_key('bound'):
-            new_binding = NSServiceGroupServerBinding()
-            new_binding.set_servicegroupname(servicegroup_obj['name'])
-            new_binding.set_servername(server['name'])
-            new_binding.set_port(server['port'])
-            try:
-                NSServiceGroupServerBinding.add(nitro, new_binding)
-            except NSNitroError as error:
-                log.debug('netscaler module error - NSServiceGroupServerBinding.add() failed: {0}'.format(error))
-                ret = False
-
-    disconnect(nitro)
+    
     return ret
 
-def ensure_servicegroups_state(ns_instance,servicegroups_obj):
+def ensure_servicegroups_state(nitro,servicegroups_obj):
     ret = True
-    nitro = connect(ns_instance)
+    
     all_servicegroups = NSServiceGroup.get_all(nitro)
     servicegroups_to_remove = []
     for servicegroup in all_servicegroups:
@@ -204,7 +206,7 @@ def ensure_servicegroups_state(ns_instance,servicegroups_obj):
             servicegroups_to_remove.append(servicegroup)
 
     for servicegroup_obj in servicegroups_obj:
-        ensure_servicegroup_state(ns_instance,servicegroup_obj)
+        ensure_servicegroup_state(nitro,servicegroup_obj)
 
     for servicegroup_to_remove in servicegroups_to_remove:
         try:
@@ -213,15 +215,15 @@ def ensure_servicegroups_state(ns_instance,servicegroups_obj):
             log.debug('netscaler module error - NSServiceGroupServerBinding.delete() failed: {0}'.format(error))
             ret = False
 
-    disconnect(nitro)
+    
     return ret
 
-def ensure_servers_state(ns_instance,servers_obj):
+def ensure_servers_state(nitro,servers_obj):
     ret = True
-    nitro = connect(ns_instance)
+    
 
     for server_obj in servers_obj:
-        ensure_server_state(ns_instance,server_obj)
+        ensure_server_state(nitro,server_obj)
 
     all_servers = NSServer.get_all(nitro)
     servers_to_remove = []
@@ -240,15 +242,15 @@ def ensure_servers_state(ns_instance,servers_obj):
             log.debug('netscaler module error - NSServer.delete() failed: {0}'.format(error))
             ret = False
 
-    disconnect(nitro)
+    
     return ret
 
-def ensure_lbvservers_state(ns_instance,lbvservers_obj):
+def ensure_lbvservers_state(nitro,lbvservers_obj):
     ret = True
-    nitro = connect(ns_instance)
+    
 
     for lbvserver_obj in lbvservers_obj:
-        ensure_lbvserver_state(ns_instance,lbvserver_obj)
+        ensure_lbvserver_state(nitro,lbvserver_obj)
 
     all_lbvservers = NSLBVServer.get_all(nitro)
     lbvservers_to_remove = []
@@ -267,12 +269,12 @@ def ensure_lbvservers_state(ns_instance,lbvservers_obj):
             log.debug('netscaler module error - NSLBVServer.delete() failed: {0}'.format(error))
             ret = False
 
-    disconnect(nitro)
+    
     return ret
 
-def ensure_lbvserver_state(ns_instance, lbvserver_obj):
+def ensure_lbvserver_state(nitro, lbvserver_obj):
     ret = True
-    nitro = connect(ns_instance)
+    
     
     all_lbvservers = NSLBVServer.get_all(nitro)
     matches_found = {}
@@ -425,9 +427,21 @@ def ensure_lbvserver_state(ns_instance, lbvserver_obj):
                 log.debug('netscaler module error - NSLBVServerServiceGroupBinding.add() failed: {0}'.format(error))
                 ret = False
 
-    disconnect(nitro)
+    
     return ret
 
+
+def ensure_cs_action_state(nitro, cs_action):
+    ret = True
+    
+
+    
+
+def get_cs_action(nitro,cs_action_name):
+    ret = True
+    
+
+    
 
 def main():
     print 'Using config file: {}'.format(sys.argv[1])
@@ -435,8 +449,10 @@ def main():
     for ns_group in conf['ns_groups']:
         log.info('Processing group {}'.format(ns_group['name']))
         ns_instance = ns_group['ns_instance']
-        ensure_servers_state(ns_instance,ns_group['servers'])
-        ensure_servicegroups_state(ns_instance,ns_group['serviceGroups'])
-        ensure_lbvservers_state(ns_instance,ns_group['lbvservers'])
+        nitro = connect(ns_instance)
+        ensure_servers_state(nitro,ns_group['servers'])
+        ensure_servicegroups_state(nitro,ns_group['serviceGroups'])
+        ensure_lbvservers_state(nitro,ns_group['lb_vservers'])
+        disconnect(nitro)
 
 if __name__ == "__main__": main()
