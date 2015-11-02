@@ -28,8 +28,8 @@ def get_config_yaml(filename):
     return conf
 
 
-def connect(nsInstance):
-    nitro = NSNitro(nsInstance['ip_address'],nsInstance['user'],nsInstance['pass'])
+def connect(ns_instance):
+    nitro = NSNitro(ns_instance['address'],ns_instance['user'],ns_instance['pass'])
     try:
         nitro.login()
     except NSNitroError as error:
@@ -46,9 +46,9 @@ def disconnect(nitro):
     return nitro
 
 
-def ensure_server_state(nsInstance, server_obj):
+def ensure_server_state(ns_instance, server_obj):
     ret = True
-    nitro = connect(nsInstance)
+    nitro = connect(ns_instance)
     all_servers = NSServer.get_all(nitro)
     matches_found = {}
     for server in all_servers:
@@ -112,9 +112,9 @@ def ensure_server_state(nsInstance, server_obj):
     return ret
 
 
-def ensure_servicegroup_state(nsInstance, servicegroup_obj):
+def ensure_servicegroup_state(ns_instance, servicegroup_obj):
     ret = True
-    nitro = connect(nsInstance)
+    nitro = connect(ns_instance)
     existing_servicegroup = NSServiceGroup()
 
     existing_servicegroup.set_servicegroupname(servicegroup_obj['name'])
@@ -190,9 +190,9 @@ def ensure_servicegroup_state(nsInstance, servicegroup_obj):
     disconnect(nitro)
     return ret
 
-def ensure_servicegroups_state(nsInstance,servicegroups_obj):
+def ensure_servicegroups_state(ns_instance,servicegroups_obj):
     ret = True
-    nitro = connect(nsInstance)
+    nitro = connect(ns_instance)
     all_servicegroups = NSServiceGroup.get_all(nitro)
     servicegroups_to_remove = []
     for servicegroup in all_servicegroups:
@@ -204,7 +204,7 @@ def ensure_servicegroups_state(nsInstance,servicegroups_obj):
             servicegroups_to_remove.append(servicegroup)
 
     for servicegroup_obj in servicegroups_obj:
-        ensure_servicegroup_state(nsInstance,servicegroup_obj)
+        ensure_servicegroup_state(ns_instance,servicegroup_obj)
 
     for servicegroup_to_remove in servicegroups_to_remove:
         try:
@@ -216,12 +216,12 @@ def ensure_servicegroups_state(nsInstance,servicegroups_obj):
     disconnect(nitro)
     return ret
 
-def ensure_servers_state(nsInstance,servers_obj):
+def ensure_servers_state(ns_instance,servers_obj):
     ret = True
-    nitro = connect(nsInstance)
+    nitro = connect(ns_instance)
 
     for server_obj in servers_obj:
-        ensure_server_state(nsInstance,server_obj)
+        ensure_server_state(ns_instance,server_obj)
 
     all_servers = NSServer.get_all(nitro)
     servers_to_remove = []
@@ -243,12 +243,12 @@ def ensure_servers_state(nsInstance,servers_obj):
     disconnect(nitro)
     return ret
 
-def ensure_lbvservers_state(nsInstance,lbvservers_obj):
+def ensure_lbvservers_state(ns_instance,lbvservers_obj):
     ret = True
-    nitro = connect(nsInstance)
+    nitro = connect(ns_instance)
 
     for lbvserver_obj in lbvservers_obj:
-        ensure_lbvserver_state(nsInstance,lbvserver_obj)
+        ensure_lbvserver_state(ns_instance,lbvserver_obj)
 
     all_lbvservers = NSLBVServer.get_all(nitro)
     lbvservers_to_remove = []
@@ -270,9 +270,9 @@ def ensure_lbvservers_state(nsInstance,lbvservers_obj):
     disconnect(nitro)
     return ret
 
-def ensure_lbvserver_state(nsInstance, lbvserver_obj):
+def ensure_lbvserver_state(ns_instance, lbvserver_obj):
     ret = True
-    nitro = connect(nsInstance)
+    nitro = connect(ns_instance)
     
     all_lbvservers = NSLBVServer.get_all(nitro)
     matches_found = {}
@@ -432,14 +432,11 @@ def ensure_lbvserver_state(nsInstance, lbvserver_obj):
 def main():
     print 'Using config file: {}'.format(sys.argv[1])
     conf = get_config_yaml(sys.argv[1])
-    if True:
-        for nsInstance in conf['nsInstances']:
-            ensure_servers_state(nsInstance,conf['servers'])
-
-        for nsInstance in conf['nsInstances']:
-            ensure_servicegroups_state(nsInstance,conf['serviceGroups'])
-
-        for nsInstance in conf['nsInstances']:
-            ensure_lbvservers_state(nsInstance,conf['lbvservers'])
+    for ns_group in conf['ns_groups']:
+        log.info('Processing group {}'.format(ns_group['name']))
+        ns_instance = ns_group['ns_instance']
+        ensure_servers_state(ns_instance,ns_group['servers'])
+        ensure_servicegroups_state(ns_instance,ns_group['serviceGroups'])
+        ensure_lbvservers_state(ns_instance,ns_group['lbvservers'])
 
 if __name__ == "__main__": main()
