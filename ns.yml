@@ -1,60 +1,56 @@
-clusters:
-  - 1:
-    clusterNum: 1
-    clusterIp: 192.168.121.60
 
-    nsInstances:
-      - ip_address: 192.168.121.50
-        user: nsroot
-        pass: nsroot
+nsInstances:
+  - ip_address: 192.168.121.50
+    user: nsroot
+    pass: nsroot
 
-    serviceGroups:
-      - name: taiga_web
-        servers:
-        - name: taiga_01
-          port: 80
-        - name: taiga_02
-          port: 80
-        protocol: HTTP
-      - name: taiga_api
-        servers:
-        - name: taiga_01
-          port: 8001
-        - name: taiga_02
-          port: 8001
-        protocol: HTTP
-
+serviceGroups:
+  - name: taiga_web
     servers:
-      - name: taiga_01
-        ip_address: 192.168.121.229
-      - name: taiga_02
-        ip_address: 192.168.121.129
+    - name: taiga_01
+      port: 80
+    - name: taiga_02
+      port: 80
+    protocol: HTTP
+  - name: taiga_api
+    servers:
+    - name: taiga_01
+      port: 8001
+    - name: taiga_02
+      port: 8001
+    protocol: HTTP
 
-    lbvservers:
-      - name: taiga_web
-        vip_address: 192.168.121.30
-        port: 80
-        protocol: HTTP
-        servicegroup_bindings:
-          - taiga_web
-      - name: taiga_api
-        vip_address: 192.168.121.20
-        port: 8001
-        protocol: HTTP
-        servicegroup_bindings:
-          - taiga_api
+servers:
+  - name: taiga_01
+    ip_address: 192.168.121.229
+  - name: taiga_02
+    ip_address: 192.168.121.129
+
+lbvservers:
+  - name: taiga_web
+    vip_address: 192.168.121.30
+    port: 80
+    protocol: HTTP
+    servicegroup_bindings:
+      - taiga_web
+  - name: taiga_api
+    vip_address: 192.168.121.20
+    port: 8001
+    protocol: HTTP
+    servicegroup_bindings:
+      - taiga_api
 
 
-    csvservers:
-      - name: taiga
-        vip_address: 192.168.121.40
-        policy_bindings:
-          - taiga
-        default_lbvserver: taiga_web
+csvservers:
+  - name: taiga
+    vip_address: 192.168.121.40
+    policy_bindings:
+      - taiga
+    default_lbvserver: taiga_web
 
-    policies:
-      cs:
-        - name: taiga
-          priority: 100
-          expression: "HTTP.REQ.URL.PATH.STARTSWITH(\"/api/\")"
-          action: taiga_api
+policies:
+  cs:
+    - name: taiga
+      priority: 100
+      expression: "HTTP.REQ.URL.PATH.STARTSWITH(\"/api/\")"
+      action: taiga_api

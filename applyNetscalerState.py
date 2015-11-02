@@ -108,7 +108,8 @@ def ensure_server_state(nsInstance, server_obj):
                 log.debug('netscaler module error - NSServer.add() failed: {0}'.format(error))
                 ret = False
 
-        return ret
+    disconnect(nitro)
+    return ret
 
 
 def ensure_servicegroup_state(nsInstance, servicegroup_obj):
@@ -186,8 +187,8 @@ def ensure_servicegroup_state(nsInstance, servicegroup_obj):
                 log.debug('netscaler module error - NSServiceGroupServerBinding.add() failed: {0}'.format(error))
                 ret = False
 
+    disconnect(nitro)
     return ret
-
 
 def ensure_servicegroups_state(nsInstance,servicegroups_obj):
     ret = True
@@ -211,6 +212,9 @@ def ensure_servicegroups_state(nsInstance,servicegroups_obj):
         except NSNitroError as error:
             log.debug('netscaler module error - NSServiceGroupServerBinding.delete() failed: {0}'.format(error))
             ret = False
+
+    disconnect(nitro)
+    return ret
 
 def ensure_servers_state(nsInstance,servers_obj):
     ret = True
@@ -236,6 +240,9 @@ def ensure_servers_state(nsInstance,servers_obj):
             log.debug('netscaler module error - NSServer.delete() failed: {0}'.format(error))
             ret = False
 
+    disconnect(nitro)
+    return ret
+
 def ensure_lbvservers_state(nsInstance,lbvservers_obj):
     ret = True
     nitro = connect(nsInstance)
@@ -259,6 +266,9 @@ def ensure_lbvservers_state(nsInstance,lbvservers_obj):
         except NSNitroError as error:
             log.debug('netscaler module error - NSLBVServer.delete() failed: {0}'.format(error))
             ret = False
+
+    disconnect(nitro)
+    return ret
 
 def ensure_lbvserver_state(nsInstance, lbvserver_obj):
     ret = True
@@ -396,15 +406,6 @@ def ensure_lbvserver_state(nsInstance, lbvserver_obj):
                 if binding.get_servicegroupname() == lbvserver_servicegroup_binding:
                     binding_found = True
                     lbvserver_servicegroup_bindings[lbvserver_servicegroup_binding] = True
-                    '''
-                    if binding.get_port() != server['port']:
-                        binding.set_port(server['port'])
-                        try:
-                            NSLBVServerServiceGroupBinding.update(nitro, binding)
-                        except NSNitroError as error:
-                            log.debug('netscaler module error - NSLBVServerServiceGroupBinding.update() failed: {0}'.format(error))
-                            ret = False
-                            '''
             if not binding_found:
                 binding_to_remove = binding
                 try:
@@ -424,35 +425,21 @@ def ensure_lbvserver_state(nsInstance, lbvserver_obj):
                 log.debug('netscaler module error - NSLBVServerServiceGroupBinding.add() failed: {0}'.format(error))
                 ret = False
 
-    return ret
-
-def getServerFromName(serversList, serverName):
-    ret = None
-    for serverEntry in serversList:
-        if serverEntry['name'] == serverName:
-            ret = serverEntry
+    disconnect(nitro)
     return ret
 
 
 def main():
-    print sys.argv[1]
+    print 'Using config file: {}'.format(sys.argv[1])
     conf = get_config_yaml(sys.argv[1])
     if True:
-        for cluster in conf['clusters']:
-            for nsInstance in cluster['nsInstances']:
-              ip_address = nsInstance['ip_address']
-              userName = nsInstance['user']
-              password = nsInstance['pass']
-              print 'nsip: {}  user: {}  pass: {}'.format(ip_address,userName,password)
-              connect(nsInstance)
+        for nsInstance in conf['nsInstances']:
+            ensure_servers_state(nsInstance,conf['servers'])
 
-            for nsInstance in cluster['nsInstances']:
-                ensure_servers_state(nsInstance,cluster['servers'])
+        for nsInstance in conf['nsInstances']:
+            ensure_servicegroups_state(nsInstance,conf['serviceGroups'])
 
-            for nsInstance in cluster['nsInstances']:
-                ensure_servicegroups_state(nsInstance,cluster['serviceGroups'])
-
-            for nsInstance in cluster['nsInstances']:
-                ensure_lbvservers_state(nsInstance,cluster['lbvservers'])
+        for nsInstance in conf['nsInstances']:
+            ensure_lbvservers_state(nsInstance,conf['lbvservers'])
 
 if __name__ == "__main__": main()
