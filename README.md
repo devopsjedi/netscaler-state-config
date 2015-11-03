@@ -1,9 +1,10 @@
 # netscaler-yml-config
 
 # Overview
-This script processes a YAML file that contains a Netscaler state and applies it to one or more appliances.  It requires the NSNitro module to be installed.  This can be done via the following command on most systems:
+This script processes a YAML file that contains a Netscaler state and applies it to one or more appliances.  It requires the NSNitro and schema modules to be installed.  These can be imported via the following commands on most systems:
 ````
 pip install nsnitro
+pip install schema
 ````
 
 It has been tested with Python 2.7.
