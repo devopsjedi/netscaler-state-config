@@ -6,7 +6,7 @@ ns_groups:
       user: nsroot
       pass: nsroot
 
-    serviceGroups:
+    service_groups:
       - name: taiga_web
         servers:
         - name: taiga_01
@@ -33,18 +33,80 @@ ns_groups:
         vip_address: 192.168.121.20
         port: 80
         protocol: HTTP
-        servicegroup_bindings:
+        service_group_bindings:
           - taiga_web
       - name: taiga_api
         vip_address: 192.168.121.30
         port: 8001
         protocol: HTTP
-        servicegroup_bindings:
+        service_group_bindings:
           - taiga_api
 
     csvservers:
       - name: taiga
         vip_address: 192.168.121.40
+        port: 80
+        protocol: HTTP
+        policy_bindings:
+          - name: taiga
+            priority: 100
+        default_lbvserver: taiga_web
+
+    cs_policies:
+      - name: taiga
+        expression: "HTTP.REQ.URL.PATH.STARTSWITH(\"/api/\")"
+        action: taiga
+
+    cs_actions:
+      - name: taiga
+        target_lbvserver: taiga_api
+
+  - name: lb_group02
+
+    ns_instance:
+      address: 192.168.121.55
+      user: nsroot
+      pass: nsroot
+
+    service_groups:
+      - name: taiga_web
+        servers:
+        - name: taiga_01
+          port: 80
+        - name: taiga_02
+          port: 80
+        protocol: HTTP
+      - name: taiga_api
+        servers:
+        - name: taiga_01
+          port: 8001
+        - name: taiga_02
+          port: 8001
+        protocol: HTTP
+
+    servers:
+      - name: taiga_01
+        ip_address: 192.168.121.229
+      - name: taiga_02
+        ip_address: 192.168.121.129
+
+    lbvservers:
+      - name: taiga_web
+        vip_address: 192.168.121.21
+        port: 80
+        protocol: HTTP
+        service_group_bindings:
+          - taiga_web
+      - name: taiga_api
+        vip_address: 192.168.121.31
+        port: 8001
+        protocol: HTTP
+        service_group_bindings:
+          - taiga_api
+
+    csvservers:
+      - name: taiga
+        vip_address: 192.168.121.70
         port: 80
         protocol: HTTP
         policy_bindings:

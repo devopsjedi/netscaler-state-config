@@ -3,6 +3,8 @@ __author__ = 'devopsjedi'
 import sys
 import yaml
 import logging
+from schema import Schema, And, Use, Or, Optional, SchemaError
+import socket
 from time import strftime
 
 LOG_FILENAME = 'applyNetscalerState_{}.log'.format(strftime("%Y%m%d_%H%M%S"))
@@ -30,12 +32,33 @@ log.addHandler(stream)
 log.addHandler(file)
 
 def get_config_yaml(filename):
-    stream = open(filename,"r")
-    conf = yaml.load(stream)
+    '''
+
+    :param filename: filename of YAML state declaration file
+    :return: object containing config items
+    '''
+
+    ret = None
+    try:
+        stream = open(filename,"r")
+        try:
+            conf = yaml.load(stream)
+            ret = conf
+        except yaml.YAMLError as error:
+            log.info('YAML import failed: {}'.format(error.message))
+    except IOError as error:
+        log.info('Failed to open {}'.format(filename))
+
+
     return conf
 
 
 def connect(ns_instance):
+    '''
+
+    :param ns_instance: NSNitro instance
+    :return: Connected NSNitro instance
+    '''
     nitro = NSNitro(ns_instance['address'],ns_instance['user'],ns_instance['pass'])
     try:
         nitro.login()
@@ -45,6 +68,11 @@ def connect(ns_instance):
 
 
 def disconnect(nitro):
+    '''
+
+    :param nitro: NSNitro instance
+    :return:  Disconnected NSNitro instance
+    '''
     try:
         nitro.logout()
     except NSNitroError as error:
@@ -53,17 +81,28 @@ def disconnect(nitro):
     return nitro
 
 
-def ensure_server_state(nitro, server_obj):
+def ensure_server_state(nitro, server_conf):
+    '''
+
+    :param nitro: NSNitro instance
+    :param server_conf: Server configuration item from input file
+    :return: True if configuration is applied successfully; False otherwise
+
+    Validates NS configuration and applies any changes needed to match the input server configuration item.
+    - If a server name and IP match the input configuration, nothing changes.
+    - If a server name matches the input configuration but the IP doesn't, the IP is updated.
+    - If an existing server has an IP address used in the configuration but the name doesn't match, the existing server is deleted and a new server is created. 
+    '''
     ret = True
     
     all_servers = NSServer.get_all(nitro)
     matches_found = {}
     for server in all_servers:
-      if server.get_name() == server_obj['name'] and server.get_ipaddress() == server_obj['ip_address']:
+      if server.get_name() == server_conf['name'] and server.get_ipaddress() == server_conf['ip_address']:
           matches_found['full_match'] = server
-      elif server.get_name() == server_obj['name']:
+      elif server.get_name() == server_conf['name']:
           matches_found['name'] = server
-      elif server.get_ipaddress() == server_obj['ip_address']:
+      elif server.get_ipaddress() == server_conf['ip_address']:
           matches_found['ip_address'] = server
 
     if matches_found.has_key('full_match'):
@@ -80,7 +119,7 @@ def ensure_server_state(nitro, server_obj):
         if matches_found.has_key('name') and not matches_found.has_key('ip_address'):
             update = True
             updated_server = matches_found['name']
-            updated_server.set_ipaddress(server_obj['ip_address'])
+            updated_server.set_ipaddress(server_conf['ip_address'])
             updated_server.set_translationip(None)
             updated_server.set_translationmask(None)
             try:
@@ -97,7 +136,9 @@ def ensure_server_state(nitro, server_obj):
                 log.debug('NSServer.delete() failed: {0}'.format(error))
                 ret = False 
             updated_server = matches_found['name']
-            updated_server.set_ipaddress(server_obj['ip_address'])
+            updated_server.set_ipaddress(server_conf['ip_address'])
+            updated_server.set_translationip(None)
+            updated_server.set_translationmask(None)
             try:
                 NSServer.update(nitro, updated_server)
             except NSNitroError as error:
@@ -105,8 +146,8 @@ def ensure_server_state(nitro, server_obj):
                 ret = False
         if not update:
             new_server = NSServer()
-            new_server.set_name(server_obj['name'])
-            new_server.set_ipaddress(server_obj['ip_address'])
+            new_server.set_name(server_conf['name'])
+            new_server.set_ipaddress(server_conf['ip_address'])
             try:
                 NSServer.add(nitro,new_server)
             except NSNitroError as error:
@@ -117,51 +158,63 @@ def ensure_server_state(nitro, server_obj):
     return ret
 
 
-def ensure_servicegroup_state(nitro, servicegroup_obj):
+def ensure_service_group_state(nitro, service_group_conf):
+    '''
+
+    :param nitro: NSNitro instance
+    :param service_group_conf: Service Group configuration item from input file
+    :return: True if configuration is applied successfully; False otherwise
+
+    Validates NS configuration and applies any changes needed to match the input service group configuration item.
+    - Creates a new service group configuration if a matching name is not found in existing service groups.
+    - If an existing service group is found with same name as configuration item, the service type is validated to match the protocol in the configuration item
+    - A new service group is created if no matching service group exists
+    - Service group binding to servers is validated and updated if necessary
+
+    '''
     ret = True
-    
-    existing_servicegroup = NSServiceGroup()
+    existing_service_group = NSServiceGroup()
 
-    existing_servicegroup.set_servicegroupname(servicegroup_obj['name'])
+    existing_service_group.set_servicegroupname(service_group_conf['name'])
     try:
-        existing_servicegroup = NSServiceGroup.get(nitro,existing_servicegroup)
+        existing_service_group = NSServiceGroup.get(nitro,existing_service_group)
     except NSNitroError as error:
-        log.debug('no existing servicegroup found for {}'.format(servicegroup_obj['name']))
-        existing_servicegroup = None
+        log.debug('no existing service_group found for {}'.format(service_group_conf['name']))
+        existing_service_group = None
 
-    if existing_servicegroup:
-        if existing_servicegroup.get_servicetype() != servicegroup_obj['protocol']:
+    if existing_service_group:
+        if existing_service_group.get_servicetype() != service_group_conf['protocol']:
             try:
-                NSServiceGroup.delete(nitro, existing_servicegroup)
+                NSServiceGroup.delete(nitro, existing_service_group)
             except NSNitroError as error:
                 log.debug('NSServiceGroup.delete() failed: {0}'.format(error))
                 ret = False
-            existing_servicegroup = None
+            existing_service_group = None
 
-    if not existing_servicegroup:
-        new_servicegroup = NSServiceGroup()
-        new_servicegroup.set_servicegroupname(servicegroup_obj['name'])
-        new_servicegroup.set_servicetype(servicegroup_obj['protocol'])
+    if not existing_service_group:
+        new_service_group = NSServiceGroup()
+        new_service_group.set_servicegroupname(service_group_conf['name'])
+        new_service_group.set_servicetype(service_group_conf['protocol'])
         try:
-            NSServiceGroup.add(nitro, new_servicegroup)
+            NSServiceGroup.add(nitro, new_service_group)
         except NSNitroError as error:
             log.debug('NSServiceGroup.add() failed: {0}'.format(error))
             ret = False
-        current_servicegroup= new_servicegroup
+        current_service_group= new_service_group
 
-    servicegroup_binding = NSServiceGroupServerBinding()
-    servicegroup_binding.set_servicegroupname(servicegroup_obj['name'])
+    service_group_binding = NSServiceGroupServerBinding()
+    service_group_binding.set_servicegroupname(service_group_conf['name'])
     try:
-        bindings = NSServiceGroupServerBinding.get(nitro, servicegroup_binding)
+        bindings = NSServiceGroupServerBinding.get(nitro, service_group_binding)
     except NSNitroError as error:
-        log.debug('no existing servicegroup server bindings found for {}'.format(servicegroup_obj['name']))
+        log.debug('no existing service_group server bindings found for {}'.format(service_group_conf['name']))
         bindings = None
 
     if bindings != None:
         bindings_to_remove = []
         for binding in bindings:
             binding_found = False
-            for server in servicegroup_obj['servers']:
+            for server in service_group_conf['servers']:
                 if binding.get_servername() == server['name']:
                     binding_found = True
                     server['bound'] = True
@@ -181,10 +234,10 @@ def ensure_servicegroup_state(nitro, servicegroup_obj):
                     ret = False
 
 
-        for server in servicegroup_obj['servers']:
+        for server in service_group_conf['servers']:
             if not server.has_key('bound'):
                 new_binding = NSServiceGroupServerBinding()
-                new_binding.set_servicegroupname(servicegroup_obj['name'])
+                new_binding.set_servicegroupname(service_group_conf['name'])
                 new_binding.set_servername(server['name'])
                 new_binding.set_port(server['port'])
                 try:
@@ -196,25 +249,35 @@ def ensure_servicegroup_state(nitro, servicegroup_obj):
     
     return ret
 
-def ensure_servicegroups_state(nitro,servicegroups_obj):
+def ensure_service_groups_state(nitro,service_groups_conf):
+    '''
+
+    :param nitro: NSNitro instance
+    :param sservice_groups_conf: List of server configuration items from input file
+    :return: True if configuration is applied successfully; False otherwise
+
+    Validates NS configuration and applies any changes needed to match the list of input service group configuration items.
+    - Checks for matching service group names between NS and config file
+    - Each server group config item in list is sent to ensure_service_group_state()
+    - Existing service groups that do not match the config are deleted
+    '''
     ret = True
-    
-    all_servicegroups = NSServiceGroup.get_all(nitro)
-    servicegroups_to_remove = []
-    for servicegroup in all_servicegroups:
+    all_service_groups = NSServiceGroup.get_all(nitro)
+    service_groups_to_remove = []
+    for service_group in all_service_groups:
         found_match = False
-        for servicegroup_obj in servicegroups_obj:
-            if servicegroup_obj['name'] == servicegroup.get_servicegroupname():
+        for service_group_conf in service_groups_conf:
+            if service_group_conf['name'] == service_group.get_servicegroupname():
                 found_match = True
         if not found_match:
-            servicegroups_to_remove.append(servicegroup)
+            service_groups_to_remove.append(service_group)
 
-    for servicegroup_obj in servicegroups_obj:
-        ensure_servicegroup_state(nitro,servicegroup_obj)
+    for service_group_conf in service_groups_conf:
+        ensure_service_group_state(nitro,service_group_conf)
 
-    for servicegroup_to_remove in servicegroups_to_remove:
+    for service_group_to_remove in service_groups_to_remove:
         try:
-            NSServiceGroup.delete(nitro, servicegroup_to_remove)
+            NSServiceGroup.delete(nitro, service_group_to_remove)
         except NSNitroError as error:
             log.debug('NSServiceGroupServerBinding.delete() failed: {0}'.format(error))
             ret = False
@@ -222,19 +285,28 @@ def ensure_servicegroups_state(nitro,servicegroups_obj):
     
     return ret
 
-def ensure_servers_state(nitro,servers_obj):
-    ret = True
-    
+def ensure_servers_state(nitro,servers_conf):
+    '''
 
-    for server_obj in servers_obj:
-        ensure_server_state(nitro,server_obj)
+    :param nitro: NSNitro instance
+    :param servers_conf: List of server configuration items from input file
+    :return: True if configuration is applied successfully; False otherwise
+
+    Validates NS configuration and applies any changes needed to match the list of input server configuration items.
+    - Sends all server config items to ensure_server_state()
+    - Iterates through list of server config items to find matching names in existing servers on the NS
+    - Deletes existing servers on the NS that do not match any server config items
+    '''
+    ret = True
+    for server_conf in servers_conf:
+        ensure_server_state(nitro,server_conf)
 
     all_servers = NSServer.get_all(nitro)
     servers_to_remove = []
     for server in all_servers:
         found_match = False
-        for server_obj in servers_obj:
-            if server_obj['name'] == server.get_name():
+        for server_conf in servers_conf:
+            if server_conf['name'] == server.get_name():
                 found_match = True
         if not found_match:
             servers_to_remove.append(server)
@@ -249,19 +321,28 @@ def ensure_servers_state(nitro,servers_obj):
     
     return ret
 
-def ensure_lbvservers_state(nitro,lbvservers_obj):
-    ret = True
-    
+def ensure_lbvservers_state(nitro,lbvservers_conf):
+    '''
 
-    for lbvserver_obj in lbvservers_obj:
-        ensure_lbvserver_state(nitro,lbvserver_obj)
+    :param nitro: NSNitro instance
+    :param lbvservers_conf: List of load balancing virtual server configuration items from input file
+    :return: True if configuration is applied successfully; False otherwise
+
+    Validates NS configuration and applies any changes needed to match the list of input lbvserver configuration items.
+    - Sends all lbvserver config items to ensure_lbvserver_state()
+    - Iterates through list of lbvserver config items to find matching names in existing lbvservers on the NS
+    - Deletes existing lbvservers on the NS that do not match any lbvserver config items
+    '''
+    ret = True
+    for lbvserver_conf in lbvservers_conf:
+        ensure_lbvserver_state(nitro,lbvserver_conf)
 
     all_lbvservers = NSLBVServer.get_all(nitro)
     lbvservers_to_remove = []
     for lbvserver in all_lbvservers:
         found_match = False
-        for lbvserver_obj in lbvservers_obj:
-            if lbvserver_obj['name'] == lbvserver.get_name():
+        for lbvserver_conf in lbvservers_conf:
+            if lbvserver_conf['name'] == lbvserver.get_name():
                 found_match = True
         if not found_match:
             lbvservers_to_remove.append(lbvserver)
@@ -276,18 +357,35 @@ def ensure_lbvservers_state(nitro,lbvservers_obj):
     
     return ret
 
-def ensure_lbvserver_state(nitro, lbvserver_obj):
+def ensure_lbvserver_state(nitro, lbvserver_conf):
+    '''
+
+    :param nitro: NSNitro instance
+    :param lbvserver_conf: Load balancing virtual server configuration item from input file
+    :return: True if configuration is applied successfully; False otherwise
+
+    Validates NS configuration and applies any changes needed to match the input lbvserver configuration item.
+    - Iterates through existing lbvservers on the NS to find matching name and/or IP address contained in the lbvserver config item
+    - An existing lbvserver on the NS with a matching name is validated and updated if necessary to match the IP of the lbvserver config item
+    - An existing lbvserver on the NS is deleted if it:
+        - Does not have a name that matches the lbvserver config item
+        - Does have an IP address the matches the lbvserver config item
+    - Creates an lbvserver on the NS using the lbvserver config item if one does not exist
+    - Iterates through lbvserver bindings to service groups in the config item
+    - Deletes existing lbvserver bindings on the NS that do not match the lbvserver config item
+    - Creates lbvserver binding on the NS for each lbvserver config item binding that does not exist
+    '''
     ret = True
     
     
     all_lbvservers = NSLBVServer.get_all(nitro)
     matches_found = {}
     for lbvserver in all_lbvservers:
-      if lbvserver.get_name() == lbvserver_obj['name'] and lbvserver.get_ipv46() == lbvserver_obj['vip_address'] and lbvserver.get_port == lbvserver_obj['port'] and lbvserver.get_servicetype == lbvserver_obj['protocol']:
+      if lbvserver.get_name() == lbvserver_conf['name'] and lbvserver.get_ipv46() == lbvserver_conf['vip_address'] and lbvserver.get_port == lbvserver_conf['port'] and lbvserver.get_servicetype == lbvserver_conf['protocol']:
           matches_found['full_match'] = lbvserver
-      elif lbvserver.get_name() == lbvserver_obj['name']:
+      elif lbvserver.get_name() == lbvserver_conf['name']:
           matches_found['name'] = lbvserver
-      elif lbvserver.get_ipv46() == lbvserver_obj['vip_address']:
+      elif lbvserver.get_ipv46() == lbvserver_conf['vip_address']:
           matches_found['vip_address'] = lbvserver
 
     if not matches_found.has_key('full_match'):
@@ -296,20 +394,20 @@ def ensure_lbvserver_state(nitro, lbvserver_obj):
 
         if matches_found.has_key('vip_address') and not matches_found.has_key('name'):
             updated_lbvserver = matches_found['vip_address']
-            updated_lbvserver.set_newname(lbvserver_obj['name'])
+            updated_lbvserver.set_newname(lbvserver_conf['name'])
             try:
                 NSLBVServer.rename(nitro, updated_lbvserver)
             except NSNitroError as error:
                 log.debug('NSLBVServer.update() failed: {0}'.format(error))
                 ret = False
             lbvserver = NSLBVServer()
-            lbvserver.set_name(lbvserver_obj['name'])
+            lbvserver.set_name(lbvserver_conf['name'])
             updated_lbvserver = NSLBVServer.get(nitro,lbvserver)
             check_for_port_and_protocol_match = True
 
         if matches_found.has_key('name') and not matches_found.has_key('vip_address'):
             updated_lbvserver = matches_found['name']
-            updated_lbvserver.set_ipv46(lbvserver_obj['vip_address'])
+            updated_lbvserver.set_ipv46(lbvserver_conf['vip_address'])
             try:
                 NSLBVServer.update(nitro, updated_lbvserver)
             except NSNitroError as error:
@@ -326,7 +424,7 @@ def ensure_lbvserver_state(nitro, lbvserver_obj):
                 log.debug('NSLBVServer.delete() failed: {0}'.format(error))
                 ret = False 
             updated_lbvserver = matches_found['name']
-            updated_lbvserver.set_ipv46(lbvserver_obj['vip_address'])
+            updated_lbvserver.set_ipv46(lbvserver_conf['vip_address'])
             try:
                 NSLBVServer.update(nitro, updated_lbvserver)
             except NSNitroError as error:
@@ -335,12 +433,12 @@ def ensure_lbvserver_state(nitro, lbvserver_obj):
             check_for_port_and_protocol_match = True
         if check_for_port_and_protocol_match:
             update = False
-            if updated_lbvserver.get_port() != lbvserver_obj['port']:
+            if updated_lbvserver.get_port() != lbvserver_conf['port']:
                 update = True
-                updated_lbvserver.set_port(lbvserver_obj['port'])
-            if updated_lbvserver.get_servicetype() != lbvserver_obj['protocol']:
+                updated_lbvserver.set_port(lbvserver_conf['port'])
+            if updated_lbvserver.get_servicetype() != lbvserver_conf['protocol']:
                 update = True
-                updated_lbvserver.set_servicetype(lbvserver_obj['protocol'])
+                updated_lbvserver.set_servicetype(lbvserver_conf['protocol'])
             if update:
                 try:
                     NSLBVServer.update(nitro, updated_lbvserver)
@@ -349,22 +447,22 @@ def ensure_lbvserver_state(nitro, lbvserver_obj):
                     ret = False
 
     existing_lbvserver = NSLBVServer()
-    existing_lbvserver.set_name(lbvserver_obj['name'])
+    existing_lbvserver.set_name(lbvserver_conf['name'])
 
     try:
         existing_lbvserver = NSLBVServer.get(nitro,existing_lbvserver)
     except NSNitroError as error:
-        log.debug('no existing lbvserver found for {}'.format(lbvserver_obj['name']))
+        log.debug('no existing lbvserver found for {}'.format(lbvserver_conf['name']))
         existing_lbvserver = None
 
     if existing_lbvserver:
         update_needed = False
         delete_needed = False
-        if existing_lbvserver.get_servicetype() != lbvserver_obj['protocol'] or existing_lbvserver.get_port() != lbvserver_obj['port']:
+        if existing_lbvserver.get_servicetype() != lbvserver_conf['protocol'] or existing_lbvserver.get_port() != lbvserver_conf['port']:
             delete_needed = True
-        elif existing_lbvserver.get_ipv46() != lbvserver_obj['vip_address']:
+        elif existing_lbvserver.get_ipv46() != lbvserver_conf['vip_address']:
             update_needed = True
-            existing_lbvserver.set_ipv46(lbvserver_obj['vip_address'])
+            existing_lbvserver.set_ipv46(lbvserver_conf['vip_address'])
         if delete_needed:
             try:
                 NSLBVServer.delete(nitro, existing_lbvserver)
@@ -381,10 +479,10 @@ def ensure_lbvserver_state(nitro, lbvserver_obj):
 
     if not existing_lbvserver:
         new_lbvserver = NSLBVServer()
-        new_lbvserver.set_name(lbvserver_obj['name'])
-        new_lbvserver.set_ipv46(lbvserver_obj['vip_address'])
-        new_lbvserver.set_port(lbvserver_obj['port'])
-        new_lbvserver.set_servicetype(lbvserver_obj['protocol'])
+        new_lbvserver.set_name(lbvserver_conf['name'])
+        new_lbvserver.set_ipv46(lbvserver_conf['vip_address'])
+        new_lbvserver.set_port(lbvserver_conf['port'])
+        new_lbvserver.set_servicetype(lbvserver_conf['protocol'])
         try:
             NSLBVServer.add(nitro, new_lbvserver)
         except NSNitroError as error:
@@ -392,26 +490,26 @@ def ensure_lbvserver_state(nitro, lbvserver_obj):
             ret = False
         current_lbvserver= new_lbvserver
 
-    lbvserver_servicegroup_binding = NSLBVServerServiceGroupBinding()
-    lbvserver_servicegroup_binding.set_name(lbvserver_obj['name'])
+    lbvserver_service_group_binding = NSLBVServerServiceGroupBinding()
+    lbvserver_service_group_binding.set_name(lbvserver_conf['name'])
     try:
-        bindings = NSLBVServerServiceGroupBinding.get(nitro, lbvserver_servicegroup_binding)
+        bindings = NSLBVServerServiceGroupBinding.get(nitro, lbvserver_service_group_binding)
     except NSNitroError as error:
-        log.debug('no existing lbvserver server bindings found for {}'.format(lbvserver_obj['name']))
+        log.debug('no existing lbvserver server bindings found for {}'.format(lbvserver_conf['name']))
         bindings = None
 
-    lbvserver_servicegroup_bindings = {}
-    for lbvserver_servicegroup_binding in lbvserver_obj['servicegroup_bindings']:
-        lbvserver_servicegroup_bindings[lbvserver_servicegroup_binding] = None
+    lbvserver_service_group_bindings = {}
+    for lbvserver_service_group_binding in lbvserver_conf['service_group_bindings']:
+        lbvserver_service_group_bindings[lbvserver_service_group_binding] = None
 
     if bindings != None:
         bindings_to_remove = []
         for binding in bindings:
             binding_found = False
-            for lbvserver_servicegroup_binding in lbvserver_servicegroup_bindings.keys():
-                if binding.get_servicegroupname() == lbvserver_servicegroup_binding:
+            for lbvserver_service_group_binding in lbvserver_service_group_bindings.keys():
+                if binding.get_servicegroupname() == lbvserver_service_group_binding:
                     binding_found = True
-                    lbvserver_servicegroup_bindings[lbvserver_servicegroup_binding] = True
+                    lbvserver_service_group_bindings[lbvserver_service_group_binding] = True
             if not binding_found:
                 binding_to_remove = binding
                 try:
@@ -420,11 +518,11 @@ def ensure_lbvserver_state(nitro, lbvserver_obj):
                     log.debug('NSLBVServerServiceGroupBinding.remove() failed: {0}'.format(error))
                     ret = False
 
-    for lbvserver_servicegroup_binding in lbvserver_servicegroup_bindings.keys():
-        if lbvserver_servicegroup_bindings[lbvserver_servicegroup_binding] == None:
+    for lbvserver_service_group_binding in lbvserver_service_group_bindings.keys():
+        if lbvserver_service_group_bindings[lbvserver_service_group_binding] == None:
             new_binding = NSLBVServerServiceGroupBinding()
-            new_binding.set_name(lbvserver_obj['name'])
-            new_binding.set_servicegroupname(lbvserver_servicegroup_binding)
+            new_binding.set_name(lbvserver_conf['name'])
+            new_binding.set_servicegroupname(lbvserver_service_group_binding)
             try:
                 NSLBVServerServiceGroupBinding.add(nitro, new_binding)
             except NSNitroError as error:
@@ -435,13 +533,20 @@ def ensure_lbvserver_state(nitro, lbvserver_obj):
     return ret
 
 
-def ensure_cs_action_state(nitro, cs_action):
-    ret = True
-    
-def add_cs_action(nitro,cs_action_obj):
+def add_cs_action(nitro,cs_action_conf):
+    '''
+
+    :param nitro: NSNitro instance
+    :param cs_action_conf: Content Switching Action configuration item from input file
+    :return: True if configuration is applied successfully; False otherwise
+
+    Creates new Content Switching Action from cs_action configuration item
+    - No NSNitro object implements this functionality
+    - Used to implement CRUD capability for CS Actions
+    '''
     ret = True
     cs_action = NSBaseResource()
-    cs_action.set_options({'name':cs_action_obj['name'], 'targetlbvserver':cs_action_obj['target_lbvserver']})
+    cs_action.set_options({'name':cs_action_conf['name'], 'targetlbvserver':cs_action_conf['target_lbvserver']})
     cs_action.resourcetype = 'csaction'
     try:
         cs_action.add_resource(nitro)
@@ -452,6 +557,16 @@ def add_cs_action(nitro,cs_action_obj):
     
 
 def get_cs_action(nitro,cs_action_name):
+    '''
+
+    :param nitro: NSNitro instance
+    :param cs_action_name: Content Switching Action name
+    :return: NSBaseResource containing CS Action attributes obtained from NS
+
+    Gets Content Switching Action from NS using name
+    - No NSNitro object implements this functionality
+    - Used to implement CRUD capability for CS Actions
+    '''
     ret = None
     cs_action = NSBaseResource()
     cs_action.resourcetype = 'csaction'
@@ -464,6 +579,16 @@ def get_cs_action(nitro,cs_action_name):
     return ret
 
 def delete_cs_action(nitro,cs_action_name):
+    '''
+
+    :param nitro: NSNitro instance
+    :param cs_action_name: Content Switching Action name
+    :return: True if delete is successful; False otherwise
+
+    Deletes Content Switching Action from NS using name
+    - No NSNitro object implements this functionality
+    - Used to implement CRUD capability for CS Actions
+    '''
     ret = True
     cs_action = NSBaseResource()
     cs_action.resourcetype = 'csaction'
@@ -476,6 +601,16 @@ def delete_cs_action(nitro,cs_action_name):
     return ret
 
 def update_cs_action(nitro,cs_action):
+    '''
+
+    :param nitro: NSNitro instance
+    :param cs_action: Content Switching Action object (NSBaseResource)
+    :return: True if updated successfully; False otherwise
+
+    Updates existing Content Switching Action on NS
+    - No NSNitro object implements this functionality
+    - Used to implement CRUD capability for CS Actions
+    '''
     ret = True
     updated_cs_action = NSBaseResource()
     updated_cs_action.resourcetype = 'csaction'
@@ -487,16 +622,26 @@ def update_cs_action(nitro,cs_action):
         ret = False
     return ret
 
-def ensure_cs_action_state(nitro,cs_action_obj):
+def ensure_cs_action_state(nitro,cs_action_conf):
+    '''
+
+    :param nitro: NSNitro instance
+    :param cs_action_conf: Content Switching Action config item from input file
+    :return: True if configuration is applied successfully; False otherwise
+
+    Validates NS configuration and applies any changes needed to match the input cs_action configuration item.
+   - Checks for an existing CS Action on the NS and validates/updates the targetlbvserver parameter
+   - Creates new CS Action on NS for cs_action config item without an existing match
+   '''
     ret = True
-    existing_cs_action = get_cs_action(nitro,cs_action_obj['name'])
+    existing_cs_action = get_cs_action(nitro,cs_action_conf['name'])
 
     if existing_cs_action:
-        if existing_cs_action.options['targetlbvserver'] != cs_action_obj['target_lbvserver']:
-            existing_cs_action.options['targetlbvserver'] = cs_action_obj['target_lbvserver']
+        if existing_cs_action.options['targetlbvserver'] != cs_action_conf['target_lbvserver']:
+            existing_cs_action.options['targetlbvserver'] = cs_action_conf['target_lbvserver']
             update_cs_action(nitro, existing_cs_action)
     else:
-        ret = add_cs_action(nitro, cs_action_obj)
+        ret = add_cs_action(nitro, cs_action_conf)
     return ret
 
 
@@ -522,7 +667,19 @@ def get_all_cs_actions(nitro):
     return all_cs_actions
 
 
-def ensure_cs_actions_state(nitro, cs_actions_obj):
+def ensure_cs_actions_state(nitro, cs_actions_conf):
+    '''
+
+    :param nitro: NSNitro instance
+    :param cs_actions_conf: List of Content Switching Action configuration items from input file
+    :return: True if configuration is applied successfully; False otherwise
+
+    Validates NS configuration and applies any changes needed to match the input list of CS Action configuration items.
+   - Iterates through list of cs_action config items and matches them to existing CS Actions on NS
+   - Sends cs_action config items that match existing CS Actions on NS to ensure_cs_action_state()
+   - Deletes existing CS Actions from NS that do not match cs_action config items in list
+   - Sends cs_action config items that do not exist on the NS to ensure_cs_action_state()
+   '''
     ret = True
 
     all_cs_actions = get_all_cs_actions(nitro)
@@ -531,52 +688,72 @@ def ensure_cs_actions_state(nitro, cs_actions_obj):
     if all_cs_actions != None:
         for existing_cs_action in all_cs_actions:
             found_match = False
-            for cs_action_obj in cs_actions_obj:
-                if existing_cs_action.options['name'] == cs_action_obj['name']:
+            for cs_action_conf in cs_actions_conf:
+                if existing_cs_action.options['name'] == cs_action_conf['name']:
                     found_match = True
-                    ensure_cs_action_state(nitro,cs_action_obj)
-                    cs_action_obj['existing'] = True
+                    ensure_cs_action_state(nitro,cs_action_conf)
+                    cs_action_conf['existing'] = True
 
             if not found_match:
                 delete_cs_action(nitro,existing_cs_action.options['name'])
 
 
-    for cs_action_obj in cs_actions_obj:
-        if not cs_action_obj.has_key('existing'):
-            ensure_cs_action_state(nitro,cs_action_obj)
+    for cs_action_conf in cs_actions_conf:
+        if not cs_action_conf.has_key('existing'):
+            ensure_cs_action_state(nitro,cs_action_conf)
 
     return ret
 
 
-def ensure_cs_policies_state(nitro,cs_policies_obj):
+def ensure_cs_policies_state(nitro,cs_policies_conf):
+    '''
+
+    :param nitro: NSNitro instance
+    :param cs_policies_conf: List of Content Switching Policy configuration items from input file
+    :return: True if configuration is applied successfully; False otherwise
+
+    Validates NS configuration and applies any changes needed to match the input list of cs_policies configuration items.
+    - Iterates through existing CS Policies on the NS to find matches to list of cs_policies config items
+    - Config items with matching existing policies on NS are sent to ensure_cs_policy_state()
+    - Deletes existing CS policies on the NS with no match in the list of config items
+    - Sends items in the config list that do not have an existing match to ensure_cs_policy_state()
+   '''
     ret = True
     try:
         all_cs_policies = NSCSPolicy().get_all(nitro)
     except NSNitroError as error:
         pass
 
-    len(all_cs_policies)
-    for cs_policy_obj in cs_policies_obj:
+    for cs_policy_conf in cs_policies_conf:
         found_match = False
         if all_cs_policies:
             for cs_policy in all_cs_policies:
-                if cs_policy.get_policyname() == cs_policy_obj['name']:
+                if cs_policy.get_policyname() == cs_policy_conf['name']:
                     found_match = True
-                    if not ensure_cs_policy_state(nitro,cs_policy_obj):
+                    if not ensure_cs_policy_state(nitro,cs_policy_conf):
                         ret = False
-                    cs_policy_obj['existing'] = True
+                    cs_policy_conf['existing'] = True
 
                 if not found_match:
                     delete_cs_policy(nitro,cs_policy)
 
-    for cs_policy_obj in cs_policies_obj:
-        if not cs_policy_obj.has_key('existing'):
-           if not ensure_cs_policy_state(nitro,cs_policy_obj):
+    for cs_policy_conf in cs_policies_conf:
+        if not cs_policy_conf.has_key('existing'):
+           if not ensure_cs_policy_state(nitro,cs_policy_conf):
                ret = False
 
     return ret
 
 def delete_cs_policy(nitro,cs_policy):
+    '''
+
+    :param nitro: NSNitro instance
+    :param cs_policy: Existing NSCSPolity object from NS
+    :return: True if delete succeeds, False otherwise
+    
+    - Deletes existing CS Policy from NS
+    - Created to work around NSCSPolicy object not deleting properly
+    '''
     ret = True
     url = "%s%s/%s" % (nitro.get_url(), cs_policy.resourcetype, cs_policy.get_policyname())
     try:
@@ -589,11 +766,24 @@ def delete_cs_policy(nitro,cs_policy):
 
 
 
-def ensure_cs_policy_state(nitro,cs_policy_obj):
+def ensure_cs_policy_state(nitro,cs_policy_conf):
+    '''
+    
+    :param nitro: NSNitro instance
+    :param cs_policy_conf: 
+    :return: True if config is applied successfully, False otherwise
+    
+    - Checks for an existing match to cs_policy config item
+    - Updates the existing cs policy on the NS if there is a mismatch with config item
+    - With unchangeable properties mismatched, the existing policy is deleted
+    - Creates new cs policy on NS if needed
+    
+    '''
+    
     ret = True
 
     try:
-        url = nitro.get_url() + 'cspolicy/' + cs_policy_obj['name']
+        url = nitro.get_url() + 'cspolicy/' + cs_policy_conf['name']
         response = nitro.get(url).get_response_field('cspolicy')[0]
         if response:
             existing_cs_policy = NSCSPolicy()
@@ -608,16 +798,16 @@ def ensure_cs_policy_state(nitro,cs_policy_obj):
         if existing_cs_policy.options['cspolicytype'] == 'Advanced Policy':
             need_new_policy = False
             update = False
-            if existing_cs_policy.get_rule() != cs_policy_obj['expression']:
+            if existing_cs_policy.get_rule() != cs_policy_conf['expression']:
                 update = True
-                existing_cs_policy.set_rule(cs_policy_obj['expression'])
+                existing_cs_policy.set_rule(cs_policy_conf['expression'])
             if existing_cs_policy.options.has_key('action'):
-                if existing_cs_policy.options['action'] != cs_policy_obj['action']:
+                if existing_cs_policy.options['action'] != cs_policy_conf['action']:
                     update = True
-                    existing_cs_policy.options['action'] = cs_policy_obj['action']
+                    existing_cs_policy.options['action'] = cs_policy_conf['action']
             else:
                 update = True
-                existing_cs_policy.options['action'] = cs_policy_obj['action']
+                existing_cs_policy.options['action'] = cs_policy_conf['action']
             if update:
                 try:
                     updated_cs_policy = NSCSPolicy()
@@ -631,27 +821,38 @@ def ensure_cs_policy_state(nitro,cs_policy_obj):
             delete_cs_policy(nitro,existing_cs_policy)
 
     if need_new_policy:
-        new_cs_policy = NSCSPolicy({'policyname':cs_policy_obj['name'],'rule':cs_policy_obj['expression']})
-        new_cs_policy.options['action'] = cs_policy_obj['action']
+        new_cs_policy = NSCSPolicy({'policyname':cs_policy_conf['name'],'rule':cs_policy_conf['expression']})
+        new_cs_policy.options['action'] = cs_policy_conf['action']
         try:
             new_cs_policy.add_resource(nitro)
         except NSNitroError as error:
             log.debug('NSCSPolicy.add() failed: {0}'.format(error))
 
 
-def ensure_csvservers_state(nitro,csvservers_obj):
+def ensure_csvservers_state(nitro,csvservers_conf):
+    '''
+    
+    :param nitro: NSNitro instance
+    :param csvservers_conf: List of csvserver config items from config file 
+    :return: True if config is applied successfully, False otherwise
+    
+    - Sends all csvserver config items to ensure_csvserver_state()
+    - Deletes any existing csvservers from NS if it does not have a matching item in the config file
+    
+    '''
+    
     ret = True
     
 
-    for csvserver_obj in csvservers_obj:
-        ensure_csvserver_state(nitro,csvserver_obj)
+    for csvserver_conf in csvservers_conf:
+        ensure_csvserver_state(nitro,csvserver_conf)
 
     all_csvservers = NSCSVServer.get_all(nitro)
     csvservers_to_remove = []
     for csvserver in all_csvservers:
         found_match = False
-        for csvserver_obj in csvservers_obj:
-            if csvserver_obj['name'] == csvserver.get_name():
+        for csvserver_conf in csvservers_conf:
+            if csvserver_conf['name'] == csvserver.get_name():
                 found_match = True
         if not found_match:
             csvservers_to_remove.append(csvserver)
@@ -668,6 +869,16 @@ def ensure_csvservers_state(nitro,csvservers_obj):
 
 
 def get_csvserver_lbvserver_binding(nitro, csvserver_name):
+    '''
+    
+    :param nitro: NSNitro instance
+    :param csvserver_name: Name of csvserver
+    :return: NSBaseResource containing csvserver_lbvserver_binding properties, None if not found on NS
+    
+    - Implements CRUD capability for csvserver_lbvserver_binding
+    - No object for csvserver_lbvserver_binding in NSNitro module
+    
+    '''
     ret = None
     binding = NSBaseResource()
     binding.resourcetype = 'csvserver_lbvserver_binding'
@@ -680,6 +891,15 @@ def get_csvserver_lbvserver_binding(nitro, csvserver_name):
     return ret
 
 def delete_csvserver_lbvserver_binding(nitro, csvserver_name):
+    '''
+    
+    :param nitro: NSNitro instance
+    :param csvserver_name: Name of csvserver
+    :return: NSBaseResource containing csvserver_lbvserver_binding properties, None if not found on NS
+    
+    - Implements CRUD capability for csvserver_lbvserver_binding
+    - No object for csvserver_lbvserver_binding in NSNitro module
+    '''
     ret = False
     binding = NSBaseResource()
     binding.resourcetype = 'csvserver_lbvserver_binding'
@@ -692,6 +912,15 @@ def delete_csvserver_lbvserver_binding(nitro, csvserver_name):
     return ret
 
 def update_csvserver_lbvserver_binding(nitro, csvserver_lbvserver_binding):
+    '''
+    
+    :param nitro: NSNitro instance
+    :param csvserver_lbvserver_binding: NSBaseResource mapped to csvserver_lbvserver_binding properties
+    :return: True if update successful; False otherwise
+    
+    - Implements CRUD capability for csvserver_lbvserver_binding
+    - No object for csvserver_lbvserver_binding in NSNitro module
+    '''
     ret = False
     updated_binding = NSBaseResource()
     updated_binding.resourcetype = 'csvserver_lbvserver_binding'
@@ -704,12 +933,21 @@ def update_csvserver_lbvserver_binding(nitro, csvserver_lbvserver_binding):
         log.debug('update_csvserver_lbvserver_binding() failed: {0}'.format(error))
     return ret
 
-def add_csvserver_lbvserver_binding(nitro, csvserver_obj):
+def add_csvserver_lbvserver_binding(nitro, csvserver_conf):
+    '''
+    
+    :param nitro: NSNitro instance
+    :param csvserver_conf: Config item for csvserver from config file 
+    :return: True if addedd successfully; False otherwise
+    
+    - Implements CRUD capability for csvserver_lbvserver_binding
+    - No object for csvserver_lbvserver_binding in NSNitro module
+    '''
     ret = False
     new_binding = NSBaseResource()
     new_binding.resourcetype = 'csvserver_lbvserver_binding'
-    new_binding.options['name'] = csvserver_obj['name']
-    new_binding.options['lbvserver'] = csvserver_obj['default_lbvserver']
+    new_binding.options['name'] = csvserver_conf['name']
+    new_binding.options['lbvserver'] = csvserver_conf['default_lbvserver']
     try:
         new_binding.add_resource(nitro)
         ret = True
@@ -718,18 +956,36 @@ def add_csvserver_lbvserver_binding(nitro, csvserver_obj):
     return ret
 
 
-def ensure_csvserver_state(nitro, csvserver_obj):
-    ret = True
+def ensure_csvserver_state(nitro, csvserver_conf):
+    '''
     
+    :param nitro: NSNitro instance 
+    :param csvserver_conf: Config item for csvserver from config file
+    :return: True if state applied successfully; False otherwise
+    
+    Validates NS configuration and applies any changes needed to match the input csvserver configuration item.
+    - Iterates through existing csvservers on the NS to find matching name and/or IP address contained in the csvserver config item
+    - An existing csvserver on the NS with a matching name is validated and updated if necessary to match the IP of the csvserver config item
+    - An existing csvserver on the NS is deleted if it:
+        - Does not have a name that matches the csvserver config item
+        - Does have an IP address the matches the csvserver config item
+    - Creates an csvserver on the NS using the csvserver config item if one does not exist
+    - Iterates through csvserver bindings to service groups in the config item
+    - Deletes existing csvserver bindings on the NS that do not match the csvserver config item
+    - Creates csvserver binding on the NS for each csvserver config item binding that does not exist
+    - Sets csvserver_lbvserver_binding for default_lbvserver value in config item
+    
+    '''
+    ret = True
     
     all_csvservers = NSCSVServer.get_all(nitro)
     matches_found = {}
     for csvserver in all_csvservers:
-      if csvserver.get_name() == csvserver_obj['name'] and csvserver.get_ipv46() == csvserver_obj['vip_address'] and csvserver.get_port == csvserver_obj['port'] and csvserver.get_servicetype == csvserver_obj['protocol']:
+      if csvserver.get_name() == csvserver_conf['name'] and csvserver.get_ipv46() == csvserver_conf['vip_address'] and csvserver.get_port == csvserver_conf['port'] and csvserver.get_servicetype == csvserver_conf['protocol']:
           matches_found['full_match'] = csvserver
-      elif csvserver.get_name() == csvserver_obj['name']:
+      elif csvserver.get_name() == csvserver_conf['name']:
           matches_found['name'] = csvserver
-      elif csvserver.get_ipv46() == csvserver_obj['vip_address']:
+      elif csvserver.get_ipv46() == csvserver_conf['vip_address']:
           matches_found['vip_address'] = csvserver
 
     if not matches_found.has_key('full_match'):
@@ -737,21 +993,29 @@ def ensure_csvserver_state(nitro, csvserver_obj):
         check_for_port_and_protocol_match = False
 
         if matches_found.has_key('vip_address') and not matches_found.has_key('name'):
+            '''
             updated_csvserver = matches_found['vip_address']
-            updated_csvserver.set_newname(csvserver_obj['name'])
+            updated_csvserver.set_newname(csvserver_conf['name'])
             try:
                 NSCSVServer.rename(nitro, updated_csvserver)
             except NSNitroError as error:
                 log.debug('NSCSVServer.update() failed: {0}'.format(error))
                 ret = False
             csvserver = NSCSVServer()
-            csvserver.set_name(csvserver_obj['name'])
+            csvserver.set_name(csvserver_conf['name'])
             updated_csvserver = NSCSVServer.get(nitro,csvserver)
             check_for_port_and_protocol_match = True
+            '''
+            csvserver_to_delete = matches_found['vip_address']
+            try:
+                NSCSVServer.delete(nitro,csvserver_to_delete)
+            except NSNitroError as error:
+                log.debug('NSCSVServer.delete() failed: {0}'.format(error))
+                ret = False
 
         if matches_found.has_key('name') and not matches_found.has_key('vip_address'):
             updated_csvserver = matches_found['name']
-            updated_csvserver.set_ipv46(csvserver_obj['vip_address'])
+            updated_csvserver.set_ipv46(csvserver_conf['vip_address'])
             try:
                 NSCSVServer.update(nitro, updated_csvserver)
             except NSNitroError as error:
@@ -768,7 +1032,7 @@ def ensure_csvserver_state(nitro, csvserver_obj):
                 log.debug('NSCSVServer.delete() failed: {0}'.format(error))
                 ret = False 
             updated_csvserver = matches_found['name']
-            updated_csvserver.set_ipv46(csvserver_obj['vip_address'])
+            updated_csvserver.set_ipv46(csvserver_conf['vip_address'])
             try:
                 NSCSVServer.update(nitro, updated_csvserver)
             except NSNitroError as error:
@@ -777,12 +1041,12 @@ def ensure_csvserver_state(nitro, csvserver_obj):
             check_for_port_and_protocol_match = True
         if check_for_port_and_protocol_match:
             update = False
-            if updated_csvserver.get_port() != csvserver_obj['port']:
+            if updated_csvserver.get_port() != csvserver_conf['port']:
                 update = True
-                updated_csvserver.set_port(csvserver_obj['port'])
-            if updated_csvserver.get_servicetype() != csvserver_obj['protocol']:
+                updated_csvserver.set_port(csvserver_conf['port'])
+            if updated_csvserver.get_servicetype() != csvserver_conf['protocol']:
                 update = True
-                updated_csvserver.set_servicetype(csvserver_obj['protocol'])
+                updated_csvserver.set_servicetype(csvserver_conf['protocol'])
             if update:
                 try:
                     NSCSVServer.update(nitro, updated_csvserver)
@@ -791,22 +1055,22 @@ def ensure_csvserver_state(nitro, csvserver_obj):
                     ret = False
 
     existing_csvserver = NSCSVServer()
-    existing_csvserver.set_name(csvserver_obj['name'])
+    existing_csvserver.set_name(csvserver_conf['name'])
 
     try:
         existing_csvserver = NSCSVServer.get(nitro,existing_csvserver)
     except NSNitroError as error:
-        log.debug('no existing csvserver found for {}'.format(csvserver_obj['name']))
+        log.debug('no existing csvserver found for {}'.format(csvserver_conf['name']))
         existing_csvserver = None
 
     if existing_csvserver:
         update_needed = False
         delete_needed = False
-        if existing_csvserver.get_servicetype() != csvserver_obj['protocol'] or existing_csvserver.get_port() != csvserver_obj['port']:
+        if existing_csvserver.get_servicetype() != csvserver_conf['protocol'] or existing_csvserver.get_port() != csvserver_conf['port']:
             delete_needed = True
-        elif existing_csvserver.get_ipv46() != csvserver_obj['vip_address']:
+        elif existing_csvserver.get_ipv46() != csvserver_conf['vip_address']:
             update_needed = True
-            existing_csvserver.set_ipv46(csvserver_obj['vip_address'])
+            existing_csvserver.set_ipv46(csvserver_conf['vip_address'])
         if delete_needed:
             try:
                 NSCSVServer.delete(nitro, existing_csvserver)
@@ -823,10 +1087,10 @@ def ensure_csvserver_state(nitro, csvserver_obj):
 
     if not existing_csvserver:
         new_csvserver = NSCSVServer()
-        new_csvserver.set_name(csvserver_obj['name'])
-        new_csvserver.set_ipv46(csvserver_obj['vip_address'])
-        new_csvserver.set_port(csvserver_obj['port'])
-        new_csvserver.set_servicetype(csvserver_obj['protocol'])
+        new_csvserver.set_name(csvserver_conf['name'])
+        new_csvserver.set_ipv46(csvserver_conf['vip_address'])
+        new_csvserver.set_port(csvserver_conf['port'])
+        new_csvserver.set_servicetype(csvserver_conf['protocol'])
         try:
             NSCSVServer.add(nitro, new_csvserver)
         except NSNitroError as error:
@@ -834,27 +1098,27 @@ def ensure_csvserver_state(nitro, csvserver_obj):
             ret = False
         current_csvserver= new_csvserver
 
-    existing_csvserver_lbvserver_binding = get_csvserver_lbvserver_binding(nitro,csvserver_obj['name'])
-    if csvserver_obj.has_key('default_lbvserver'):
+    existing_csvserver_lbvserver_binding = get_csvserver_lbvserver_binding(nitro,csvserver_conf['name'])
+    if csvserver_conf.has_key('default_lbvserver'):
         if existing_csvserver_lbvserver_binding != None:
-            if existing_csvserver_lbvserver_binding.options['lbvserver'] != csvserver_obj['default_lbvserver']:
-                existing_csvserver_lbvserver_binding.options['lbvserver'] = csvserver_obj['default_lbvserver']
+            if existing_csvserver_lbvserver_binding.options['lbvserver'] != csvserver_conf['default_lbvserver']:
+                existing_csvserver_lbvserver_binding.options['lbvserver'] = csvserver_conf['default_lbvserver']
                 update_csvserver_lbvserver_binding(nitro,existing_csvserver_lbvserver_binding)
         else:
-            add_csvserver_lbvserver_binding(nitro,csvserver_obj)
+            add_csvserver_lbvserver_binding(nitro,csvserver_conf)
     elif existing_csvserver_lbvserver_binding != None:
-        delete_csvserver_lbvserver_binding(nitro,csvserver_obj['name'])
+        delete_csvserver_lbvserver_binding(nitro,csvserver_conf['name'])
 
 
     csvserver_policy_binding = NSCSVServerCSPolicyBinding()
-    csvserver_policy_binding.set_name(csvserver_obj['name'])
+    csvserver_policy_binding.set_name(csvserver_conf['name'])
     try:
         existing_bindings = NSCSVServerCSPolicyBinding.get(nitro, csvserver_policy_binding)
     except NSNitroError as error:
-        log.debug('no existing csvserver policy bindings found for {}'.format(csvserver_obj['name']))
+        log.debug('no existing csvserver policy bindings found for {}'.format(csvserver_conf['name']))
         existing_bindings = None
 
-    for binding in csvserver_obj['policy_bindings']:
+    for binding in csvserver_conf['policy_bindings']:
         if existing_bindings != None:
             bindings_to_remove = []
             for existing_binding in existing_bindings:
@@ -871,10 +1135,10 @@ def ensure_csvserver_state(nitro, csvserver_obj):
                         log.debug('NSCSVServerCSPolicyBinding.delete() failed: {0}'.format(error))
                         ret = False
 
-        for binding in csvserver_obj['policy_bindings']:
+        for binding in csvserver_conf['policy_bindings']:
             if not binding.has_key('existing'):
                 new_binding = NSCSVServerCSPolicyBinding()
-                new_binding.set_name(csvserver_obj['name'])
+                new_binding.set_name(csvserver_conf['name'])
                 new_binding.set_policyname(binding['name'])
                 new_binding.set_priority(binding['priority'])
                 try:
@@ -886,20 +1150,130 @@ def ensure_csvserver_state(nitro, csvserver_obj):
     
     return ret
 
+def validate_config_yaml(config_from_yaml):
+    '''
+
+    :param config_from_yaml: Dictionary containing contents of YAML state declaration
+    :return: True if validation successful; False otherwise
+
+    - Validates schema of configuration items from config file
+    - Ensures referential integrity of config items that refer to other config items
+    '''
+
+    ret = True
+
+    schema = {}
+    schema['ns_instance'] = Schema({'user': str,
+                                    'pass': str,
+                                    'address': Or(And(Use(str), lambda n: socket.inet_aton(n)),And(Use(str), lambda n: socket.gethostbyname(n))) })
+    schema['service_groups'] = Schema([{'name': str,
+                                        'protocol': str,
+                                        'servers':[
+                                            {'name': And(Use(str),lambda n: n in all_servers),
+                                             'port': And(Use(int), lambda n: 1 <= n <= 65535)}]}])
+    schema['servers'] = Schema([{'name': str,
+                                 'ip_address': And(Use(str), lambda n: socket.inet_aton(n))}])
+
+    schema['lbvservers'] = Schema([{'name': str,
+                                    'vip_address': And(Use(str),
+                                                       lambda n: socket.inet_aton(n)),
+                                    'port':And(Use(int), lambda n: 1 <= n <= 65535),
+                                    'protocol': str,
+                                    'service_group_bindings':[
+                                        And(Use(str),lambda n: n in all_service_groups)
+                                    ]}])
+
+    schema['csvservers'] = Schema([{'name': str,
+                                    'vip_address': And(Use(str),
+                                                       lambda n: socket.inet_aton(n)),
+                                    'port':And(Use(int), lambda n: 1 <= n <= 65535),
+                                    'protocol': str,
+                                    'default_lbvserver': And(Use(str),lambda n: n in all_lbvservers),
+                                    'policy_bindings':[
+                                        {'name': And(Use(str),lambda n: n in all_cs_policies),
+                                        'priority': int}]
+                                     }])
+
+    schema['cs_policies'] = Schema([{'name':str, 'expression': str, 'action':And(Use(str),lambda n: n in all_cs_actions)}])
+
+    schema['cs_actions'] = Schema([{'name': str, 'target_lbvserver': And(Use(str),lambda n: n in all_lbvservers)}])
+
+
+    if config_from_yaml.has_key('ns_groups'):
+        conf_items = ['ns_instance','service_groups','servers','lbvservers','csvservers','cs_policies','cs_actions']
+        for group in config_from_yaml['ns_groups']:
+            all_servers = []
+            if group.has_key('servers'):
+                for server in group['servers']:
+                    if server.has_key('name'):
+                        all_servers.append(server['name'])
+            all_service_groups = []
+            if group.has_key('service_groups'):
+                for service_group in group['service_groups']:
+                    if service_group.has_key('name'):
+                        all_service_groups.append(service_group['name'])
+            all_lbvservers = []
+            if group.has_key('lbvservers'):
+                for lbvserver in group['lbvservers']:
+                    if lbvserver.has_key('name'):
+                        all_lbvservers.append(lbvserver['name'])
+            all_cs_policies = []
+            if group.has_key('cs_policies'):
+                for cs_policy in group['cs_policies']:
+                    if cs_policy.has_key('name'):
+                        all_cs_policies.append(cs_policy['name'])
+            all_cs_actions = []
+            if group.has_key('cs_actions'):
+                for cs_action in group['cs_actions']:
+                    if cs_action.has_key('name'):
+                        all_cs_actions.append(cs_action['name'])
+                        
+            for conf_item in conf_items:
+                if group.has_key(conf_item):
+                    if validate_schema(schema[conf_item],group[conf_item]) != None:
+                        log.info('validation of {} in ns_groups: {} failed'.format(conf_item,group['name']))
+                        ret = False
+    else:
+        log.info('ns_groups node not found in yaml')
+        ret = False
+
+    return ret
+
+
+def validate_schema(schema_obj,input):
+    '''
+
+    :param schema_obj: schema.Schema() object
+    :param input: object to be validated against schema
+    :return: None if schema validation successful; Error message (str) if validation fails
+
+    '''
+    ret = None
+    try:
+        schema_obj.validate(input)
+    except SchemaError as error:
+        ret = error.message
+    return ret
+
 
 def main():
-    print 'Using config file: {}'.format(sys.argv[1])
+    log.info('Using config file: {}'.format(sys.argv[1]))
     conf = get_config_yaml(sys.argv[1])
-    for ns_group in conf['ns_groups']:
-        log.info('Processing group {}'.format(ns_group['name']))
-        ns_instance = ns_group['ns_instance']
-        nitro = connect(ns_instance)
-        ensure_servers_state(nitro,ns_group['servers'])
-        ensure_servicegroups_state(nitro,ns_group['serviceGroups'])
-        ensure_lbvservers_state(nitro,ns_group['lbvservers'])
-        ensure_cs_actions_state(nitro,ns_group['cs_actions'])
-        ensure_cs_policies_state(nitro,ns_group['cs_policies'])
-        ensure_csvservers_state(nitro,ns_group['csvservers'])
-        disconnect(nitro)
+
+    if validate_config_yaml(conf):
+        for ns_group in conf['ns_groups']:
+            log.info('Processing group {}'.format(ns_group['name']))
+            ns_instance = ns_group['ns_instance']
+            nitro = connect(ns_instance)
+            if nitro.get_sessionid() != None:
+                ensure_servers_state(nitro,ns_group['servers'])
+                ensure_service_groups_state(nitro,ns_group['service_groups'])
+                ensure_lbvservers_state(nitro,ns_group['lbvservers'])
+                ensure_cs_actions_state(nitro,ns_group['cs_actions'])
+                ensure_cs_policies_state(nitro,ns_group['cs_policies'])
+                ensure_csvservers_state(nitro,ns_group['csvservers'])
+                disconnect(nitro)
+            else:
+                log.info('Connection to NetScaler on {} failed'.format(ns_group['ns_instance']['address']))
 
 if __name__ == "__main__": main()
