@@ -60,7 +60,7 @@ Virtual server for Content Switching
 * Target Load Balancing Virtual Server
 
 # YAML Schema
-The format of the YAML is hierarchical and relates to the logical state of the managed resources.  Components relationships are defined using the 'name' key.
+The format of the YAML is hierarchical and relates to the logical state of the managed resources.  Component relationships are defined using the 'name' key when referring to another component.  Referential integrity is validated prior to applying the state.
 
 ```YAML
 ns_groups:  #Contains a list of one or more NetScaler groups, each with an independent configuration
