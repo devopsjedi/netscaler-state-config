@@ -1,19 +1,21 @@
-# netscaler-yml-config
+# netscaler-state-config
 
 # Overview
-This script processes a YAML file that contains a Netscaler state and applies it to one or more appliances.  It requires the NSNitro and schema modules to be installed.  These can be imported via the following commands on most systems:
+This script processes a YAML file that contains a NetScaler state and applies it to one or more appliances.  It requires the NSNitro and schema modules to be installed.  These can be imported via the following commands on most systems:
 ````
 pip install nsnitro
 pip install schema
 ````
 
-It has been tested with Python 2.7.
+This has been tested with Python 2.7.  A best practice would be to run this script against a newly initialized Netscaler rather than one with an existing configuration.  The utility will ensure that the NetScaler state maches the input configuration file so any existing managed resource types on the target NetScaler that are not contained in the configuration file will be removed.  However, it is possible to encode a configuration file with the existing state of a NetScaler and begin managing it with this utility going forward.  Be cautious with this approach- make sure you back it up first.
 
 # Usage
 The script accepts the filename of a YAML-based configuration ("ns.yml" for example)
 ````
 python apply_netscaler_state.py <yaml_filename>
 ````
+The YAML input file is validated to ensure compliance with the schema defined below.  Invalid configurations will not be applied.
+
 # Output
 A log file is produced in the working directory each time the script is executed.
 
