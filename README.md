@@ -59,7 +59,7 @@ Virtual server for Content Switching
 # YAML Schema
 The format of the YAML is hierarchical and relates to the logical state of the managed resources.  Components relationships are defined using the 'name' key.
 
-````
+```YAML
 ns_groups:  #Contains a list of one or more NetScaler groups, each with an independent configuration
   - name: <ns_group_name>
     ns_instance:
@@ -104,7 +104,7 @@ ns_groups:  #Contains a list of one or more NetScaler groups, each with an indep
       cs_actions:  # Contains a list of one or more Content Switching Action definitions
         - name: <cs_action_name>
           target_lbvserver: <lbvserver_name>  # Reference to LBVServer name contained in LBVServer definition
-````
+```
               
             
          
