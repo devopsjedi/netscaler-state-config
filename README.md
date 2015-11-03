@@ -74,36 +74,36 @@ ns_groups:  #Contains a list of one or more NetScaler groups, each with an indep
           port: <port>
         protocol: <protocol_name>  # Service type e.g. HTTP
     
-     servers:  # Contains a list of one or more Load Balacing Server definitions
-       - name: <server_name>
-         ip_address: <ip>
+    servers:  # Contains a list of one or more Load Balacing Server definitions
+      - name: <server_name>
+        ip_address: <ip>
 
-     lbvservers:  # Contains a list of one or more Load Balancing Virtual Server definitions
-       - name: <lbvserver_name>
-         vip_address: <lbvserver_ip_address>  # Virtual IP Address of lbvserver
-         port: <port>
-         protocol: <protocol_name>  # Service type e.g. HTTP
-         service_group_bindings:  # Contains a list of one or more Service Groups to bind the lbvserver to
-           - <service_group_name>  # Reference to Service Group name contained in Service Group definition
+    lbvservers:  # Contains a list of one or more Load Balancing Virtual Server definitions
+      - name: <lbvserver_name>
+        vip_address: <lbvserver_ip_address>  # Virtual IP Address of lbvserver
+        port: <port>
+        protocol: <protocol_name>  # Service type e.g. HTTP
+        service_group_bindings:  # Contains a list of one or more Service Groups to bind the lbvserver to
+          - <service_group_name>  # Reference to Service Group name contained in Service Group definition
       
-      csvservers:  # Contains a list of one or more Content Switching Virtual Server definitions
-        - name: <csvserver_name>
-          vip_address: <csvserver_ip_address>  # Virtual IP Address of csvserver
-          port: <port>
-          protocol: <protocol_name> # Service type e.g. HTTP
-          policy_bindings:  # Contains a list of one or more Content Switching policy bindings
-            - name: <cs_policy_name>  # Reference to CS Policy name contained in CS Policy definition
-              priority: <priority>  # Integer value of policy binding e.g. 100
-          default_lbvserver: <lbvserver_name>  # Reference to LBVServer name contained in LBVServer definition
-          
-      cs_policies:  # Contains a list of one or more Content Switching Policy definitions
-        - name: <cs_policy_name>
-          expression: <ns_policy_expression>  # Valid NetScaler policy expression
-          action: <cs_action_name>  # Reference to CS Action name contained in CS Action definition
-          
-      cs_actions:  # Contains a list of one or more Content Switching Action definitions
-        - name: <cs_action_name>
-          target_lbvserver: <lbvserver_name>  # Reference to LBVServer name contained in LBVServer definition
+    csvservers:  # Contains a list of one or more Content Switching Virtual Server definitions
+      - name: <csvserver_name>
+        vip_address: <csvserver_ip_address>  # Virtual IP Address of csvserver
+        port: <port>
+        protocol: <protocol_name> # Service type e.g. HTTP
+        policy_bindings:  # Contains a list of one or more Content Switching policy bindings
+          - name: <cs_policy_name>  # Reference to CS Policy name contained in CS Policy definition
+            priority: <priority>  # Integer value of policy binding e.g. 100
+        default_lbvserver: <lbvserver_name>  # Reference to LBVServer name contained in LBVServer definition
+        
+    cs_policies:  # Contains a list of one or more Content Switching Policy definitions
+      - name: <cs_policy_name>
+        expression: <ns_policy_expression>  # Valid NetScaler policy expression
+        action: <cs_action_name>  # Reference to CS Action name contained in CS Action definition
+        
+    cs_actions:  # Contains a list of one or more Content Switching Action definitions
+      - name: <cs_action_name>
+        target_lbvserver: <lbvserver_name>  # Reference to LBVServer name contained in LBVServer definition
 ```
               
             
