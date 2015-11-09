@@ -7,52 +7,7 @@ from schema import Schema, And, Use, Or, Optional, SchemaError
 import socket
 from time import strftime
 import yaml
-import yaml.constructor
-
-try:
-    # included in standard lib from Python 2.7
-    from collections import OrderedDict
-except ImportError:
-    # try importing the backported drop-in replacement
-    # it's available on PyPI
-    from ordereddict import OrderedDict
-
-
-class OrderedDictYAMLLoader(yaml.Loader):
-    """
-    A YAML loader that loads mappings into ordered dictionaries.
-    """
-
-    def __init__(self, *args, **kwargs):
-        yaml.Loader.__init__(self, *args, **kwargs)
-
-        self.add_constructor(u'tag:yaml.org,2002:map', type(self).construct_yaml_map)
-        self.add_constructor(u'tag:yaml.org,2002:omap', type(self).construct_yaml_map)
-
-    def construct_yaml_map(self, node):
-        data = OrderedDict()
-        yield data
-        value = self.construct_mapping(node)
-        data.update(value)
-
-    def construct_mapping(self, node, deep=False):
-        if isinstance(node, yaml.MappingNode):
-            self.flatten_mapping(node)
-        else:
-            raise yaml.constructor.ConstructorError(None, None,
-                'expected a mapping node, but found %s' % node.id, node.start_mark)
-
-        mapping = OrderedDict()
-        for key_node, value_node in node.value:
-            key = self.construct_object(key_node, deep=deep)
-            try:
-                hash(key)
-            except TypeError, exc:
-                raise yaml.constructor.ConstructorError('while constructing a mapping',
-                    node.start_mark, 'found unacceptable key (%s)' % exc, key_node.start_mark)
-            value = self.construct_object(value_node, deep=deep)
-            mapping[key] = value
-        return mapping
+from collections import OrderedDict
 
 LOG_FILENAME = 'applyNetscalerState_{}.log'.format(strftime("%Y%m%d_%H%M%S"))
 
@@ -67,23 +22,6 @@ from nsnitro.nsresources.nscspolicy import NSCSPolicy
 from nsnitro.nsresources.nscsvserver import NSCSVServer
 from nsnitro.nsresources.nscsvservercspolicybinding import NSCSVServerCSPolicyBinding
 from nsnitro.nsresources.nsbaseresource import NSBaseResource
-#from nitro.nsresources.nssslvserversslcertkeybinding import NSSSLVServerSSLCertKeyBinding
-
-from nssrc.com.citrix.netscaler.nitro.service.nitro_service import nitro_service
-from nssrc.com.citrix.netscaler.nitro.service.nitro_service import nitro_exception
-from nssrc.com.citrix.netscaler.nitro.resource.config.basic.server import server
-
-_mapping_tag = yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG
-'''
-def dict_representer(dumper, data):
-    return dumper.represent_dict(data.iteritems())
-
-def dict_constructor(loader, node):
-    return collections.OrderedDict(loader.construct_pairs(node))
-
-yaml.add_representer(collections.OrderedDict, dict_representer)
-yaml.add_constructor(_mapping_tag, dict_constructor)
-'''
 
 log = logging.getLogger('applyNetscalerState')
 log.setLevel(logging.DEBUG)
@@ -92,6 +30,64 @@ stream.setLevel(logging.DEBUG)
 file = logging.FileHandler(LOG_FILENAME)
 log.addHandler(stream)
 log.addHandler(file)
+
+ns_resource_id = {'server':'name',
+                'csaction':'name',
+                'cspolicy':'policyname',
+                'lbvserver':'name',
+                'servicegroup':'servicegroupname'
+                }
+
+ns_group_resource_types = ['name','ns_instance','servers','service_groups','lbvservers','csvservers','cs_policies','cs_actions']
+
+rw_properties = {'server':
+                     [{'nitro':'ipaddress',
+                      'yaml':'ip_address'},
+                      {'nitro':'name',
+                       'yaml':'name'}],
+                 'csaction':
+                     [{'nitro':'name',
+                       'yaml':'name'},
+                      {'nitro':'targetlbvserver',
+                       'yaml':'target_lbvserver'}],
+                 'cspolicy':
+                     [{'nitro':'policyname',
+                       'yaml':'name'},
+                      {'nitro':'rule',
+                       'yaml':'expression'},
+                      {'nitro':'action',
+                       'yaml':'action'}],
+                 'lbvserver':
+                     [{'nitro':'name',
+                       'yaml':'name'},
+                      {'nitro':'ipv46',
+                       'yaml':'vip_address'},
+                      {'nitro':'port',
+                       'yaml':'port'},
+                      {'nitro':'servicetype',
+                       'yaml':'protocol'}],
+                 'csvserver':
+                     [{'nitro':'name',
+                       'yaml':'name'},
+                      {'nitro':'ipv46',
+                       'yaml':'vip_address'},
+                      {'nitro':'port',
+                       'yaml':'port'},
+                      {'nitro':'servicetype',
+                       'yaml':'protocol'}],
+                 'servicegroup':
+                     [{'nitro':'servicegroupname',
+                      'yaml':'name'},
+                      {'nitro':'servicetype',
+                       'yaml':'protocol'}],
+                 'servicegroup_binding':
+                     [{'nitro':'servicegroupname',
+                       'yaml':'name'},
+                      {'nitro':'servername',
+                       'yaml':'server'},
+                      {'nitro':'port',
+                       'yaml':'port'}]
+                 }
 
 
 def get_config_yaml(filename):
@@ -133,6 +129,17 @@ def update_yaml(conf,filename):
 
 
 def ordered_load(stream, Loader=yaml.Loader, object_pairs_hook=OrderedDict):
+    '''
+
+    :param stream: stream object for file input
+    :param Loader: yaml.Loader class
+    :param object_pairs_hook: assocated with OrderedDict
+    :return:
+
+    Needed a method to load YAML as an OrderedDict object so input file format could be maintained during export.
+    Found and used solution from this URL: http://ambracode.com/index/show/13055
+
+    '''
     class OrderedLoader(Loader):
         pass
     def construct_mapping(loader, node):
@@ -143,7 +150,21 @@ def ordered_load(stream, Loader=yaml.Loader, object_pairs_hook=OrderedDict):
         construct_mapping)
     return yaml.load(stream, OrderedLoader)
 
+
 def ordered_dump(data, stream=None, Dumper=yaml.Dumper, **kwds):
+    '''
+
+    :param data: Input data object to be exported
+    :param stream: stream object for file access
+    :param Dumper: yaml.Dumper class
+    :param kwds: keywords passed to yaml dumper
+    :return: yaml.dump return value
+
+    Needed a method to export YAML from an OrderedDict object so existing resource configuration order could be maintained during export.
+    Found and used solution from this URL: http://ambracode.com/index/show/13055
+    kwargs: default_flow_style=False produces one line for each entity
+
+    '''
     class OrderedDumper(Dumper):
         pass
     def _dict_representer(dumper, data):
@@ -205,18 +226,18 @@ def ensure_server_state(nitro, server_conf):
       elif server.get_ipaddress() == server_conf['ip_address']:
           matches_found['ip_address'] = server
 
-    if matches_found.has_key('full_match'):
+    if 'full_match' in matches_found.keys():
         return True
     else:
         update = False
-        if matches_found.has_key('ip_address') and not matches_found.has_key('name'):
+        if 'ip_address' in matches_found.keys() and not 'name' in matches_found.keys():
             server_to_delete = matches_found['ip_address']
             try:
                 NSServer.delete(nitro,server_to_delete)
             except NSNitroError as error:
                 log.debug('NSServer.delete() failed: {0}'.format(error))
                 ret = False
-        if matches_found.has_key('name') and not matches_found.has_key('ip_address'):
+        if 'name' in matches_found.keys() and not 'ip_address' in matches_found.keys():
             update = True
             updated_server = matches_found['name']
             updated_server.set_ipaddress(server_conf['ip_address'])
@@ -227,7 +248,7 @@ def ensure_server_state(nitro, server_conf):
             except NSNitroError as error:
                 log.debug('NSServer.update() failed: {0}'.format(error))
                 ret = False
-        if matches_found.has_key('name') and matches_found.has_key('ip_address'):
+        if 'name' in matches_found.keys() and 'ip_address' in matches_found.keys():
             update = True
             server_to_delete = matches_found['ip_address']
             try:
@@ -351,7 +372,7 @@ def ensure_service_group_state(nitro, service_group_conf):
 
 
         for server_binding_conf in service_group_conf['servers']:
-            if not server_binding_conf.has_key('bound'):
+            if not 'bound' in server_binding_conf.keys():
                 new_binding = NSServiceGroupServerBinding()
                 new_binding.set_servicegroupname(service_group_conf['name'])
                 new_binding.set_servername(server_binding_conf['name'])
@@ -506,11 +527,11 @@ def ensure_lbvserver_state(nitro, lbvserver_conf):
       elif lbvserver.get_ipv46() == lbvserver_conf['vip_address']:
           matches_found['vip_address'] = lbvserver
 
-    if not matches_found.has_key('full_match'):
+    if not 'full_match' in matches_found.keys():
 
         check_for_port_and_protocol_match = False
 
-        if matches_found.has_key('vip_address') and not matches_found.has_key('name'):
+        if 'vip_address' in matches_found.keys() and not 'name' in matches_found.keys():
             updated_lbvserver = matches_found['vip_address']
             updated_lbvserver.set_newname(lbvserver_conf['name'])
             try:
@@ -523,7 +544,7 @@ def ensure_lbvserver_state(nitro, lbvserver_conf):
             updated_lbvserver = NSLBVServer.get(nitro,lbvserver)
             check_for_port_and_protocol_match = True
 
-        if matches_found.has_key('name') and not matches_found.has_key('vip_address'):
+        if 'name' in matches_found.keys() and not 'vip_address' in matches_found.keys():
             updated_lbvserver = matches_found['name']
             updated_lbvserver.set_ipv46(lbvserver_conf['vip_address'])
             try:
@@ -533,7 +554,7 @@ def ensure_lbvserver_state(nitro, lbvserver_conf):
                 ret = False
             check_for_port_and_protocol_match = True
 
-        if matches_found.has_key('name') and matches_found.has_key('vip_address'):
+        if 'name' in matches_found.keys() and 'vip_address' in matches_found.keys():
             update = True
             lbvserver_to_delete = matches_found['vip_address']
             try:
@@ -817,7 +838,7 @@ def ensure_cs_actions_state(nitro, cs_actions_conf):
 
 
     for cs_action_conf in cs_actions_conf:
-        if not cs_action_conf.has_key('existing'):
+        if not 'existing' in cs_action_conf.keys():
             ensure_cs_action_state(nitro,cs_action_conf)
         else:
             cs_action_conf.pop('existing')
@@ -858,7 +879,7 @@ def ensure_cs_policies_state(nitro,cs_policies_conf):
                     delete_cs_policy(nitro,cs_policy)
 
     for cs_policy_conf in cs_policies_conf:
-        if not cs_policy_conf.has_key('existing'):
+        if not 'existing' in cs_policy_conf.keys():
            if not ensure_cs_policy_state(nitro,cs_policy_conf):
                ret = False
         else:
@@ -923,7 +944,7 @@ def ensure_cs_policy_state(nitro,cs_policy_conf):
             if existing_cs_policy.get_rule() != cs_policy_conf['expression']:
                 update = True
                 existing_cs_policy.set_rule(cs_policy_conf['expression'])
-            if existing_cs_policy.options.has_key('action'):
+            if 'action' in existing_cs_policy.options.keys():
                 if existing_cs_policy.options['action'] != cs_policy_conf['action']:
                     update = True
                     existing_cs_policy.options['action'] = cs_policy_conf['action']
@@ -1110,11 +1131,11 @@ def ensure_csvserver_state(nitro, csvserver_conf):
       elif csvserver.get_ipv46() == csvserver_conf['vip_address']:
           matches_found['vip_address'] = csvserver
 
-    if not matches_found.has_key('full_match'):
+    if not 'full_match' in matches_found.keys():
 
         check_for_port_and_protocol_match = False
 
-        if matches_found.has_key('vip_address') and not matches_found.has_key('name'):
+        if 'vip_address' in matches_found.keys() and not 'name' in matches_found.keys():
             '''
             updated_csvserver = matches_found['vip_address']
             updated_csvserver.set_newname(csvserver_conf['name'])
@@ -1135,7 +1156,7 @@ def ensure_csvserver_state(nitro, csvserver_conf):
                 log.debug('NSCSVServer.delete() failed: {0}'.format(error))
                 ret = False
 
-        if matches_found.has_key('name') and not matches_found.has_key('vip_address'):
+        if 'name' in matches_found.keys() and not 'vip_address' in matches_found.keys():
             updated_csvserver = matches_found['name']
             updated_csvserver.set_ipv46(csvserver_conf['vip_address'])
             try:
@@ -1145,7 +1166,7 @@ def ensure_csvserver_state(nitro, csvserver_conf):
                 ret = False
             check_for_port_and_protocol_match = True
 
-        if matches_found.has_key('name') and matches_found.has_key('vip_address'):
+        if 'name' in matches_found.keys() and 'vip_address' in matches_found.keys():
             update = True
             csvserver_to_delete = matches_found['vip_address']
             try:
@@ -1221,7 +1242,7 @@ def ensure_csvserver_state(nitro, csvserver_conf):
         current_csvserver= new_csvserver
 
     existing_csvserver_lbvserver_binding = get_csvserver_lbvserver_binding(nitro,csvserver_conf['name'])
-    if csvserver_conf.has_key('default_lbvserver'):
+    if 'default_lbvserver' in csvserver_conf.keys():
         if existing_csvserver_lbvserver_binding != None:
             if existing_csvserver_lbvserver_binding.options['lbvserver'] != csvserver_conf['default_lbvserver']:
                 existing_csvserver_lbvserver_binding.options['lbvserver'] = csvserver_conf['default_lbvserver']
@@ -1258,7 +1279,7 @@ def ensure_csvserver_state(nitro, csvserver_conf):
                         ret = False
 
         for binding in csvserver_conf['policy_bindings']:
-            if not binding.has_key('existing'):
+            if not 'existing' in binding.keys():
                 new_binding = NSCSVServerCSPolicyBinding()
                 new_binding.set_name(csvserver_conf['name'])
                 new_binding.set_policyname(binding['name'])
@@ -1330,33 +1351,33 @@ def validate_config_yaml(config_from_yaml):
             conf_items = ['ns_instance','service_groups','servers','lbvservers','csvservers','cs_policies','cs_actions']
             for group in config_from_yaml['ns_groups']:
                 all_servers = []
-                if group.has_key('servers'):
+                if 'servers' in group.keys():
                     for server in group['servers']:
-                        if server.has_key('name'):
+                        if 'name' in server.keys():
                             all_servers.append(server['name'])
                 all_service_groups = []
-                if group.has_key('service_groups'):
+                if 'service_groups' in group.keys():
                     for service_group in group['service_groups']:
-                        if service_group.has_key('name'):
+                        if 'name' in service_group.keys():
                             all_service_groups.append(service_group['name'])
                 all_lbvservers = []
-                if group.has_key('lbvservers'):
+                if 'lbvservers' in group.keys():
                     for lbvserver in group['lbvservers']:
-                        if lbvserver.has_key('name'):
+                        if 'name' in lbvserver.keys():
                             all_lbvservers.append(lbvserver['name'])
                 all_cs_policies = []
-                if group.has_key('cs_policies'):
+                if 'cs_policies' in group.keys():
                     for cs_policy in group['cs_policies']:
-                        if cs_policy.has_key('name'):
+                        if 'name' in cs_policy.keys():
                             all_cs_policies.append(cs_policy['name'])
                 all_cs_actions = []
-                if group.has_key('cs_actions'):
+                if 'cs_actions' in group.keys():
                     for cs_action in group['cs_actions']:
-                        if cs_action.has_key('name'):
+                        if 'name' in cs_action.keys():
                             all_cs_actions.append(cs_action['name'])
 
                 for conf_item in conf_items:
-                    if group.has_key(conf_item):
+                    if conf_item in group.keys():
                         if validate_schema(schema[conf_item],group[conf_item]) != None:
                             log.info('validation of {} in ns_groups: {} failed'.format(conf_item,group['name']))
                             ret = False
@@ -1387,6 +1408,14 @@ def validate_schema(schema_obj,input):
 
 
 def validate_ns_groups_conf(conf):
+    '''
+
+    :param conf:  Dictionary containing contents of YAML state declaration
+    :return:    True if schema is valid; False otherwise
+
+    Validates top level of YAML configuration file to ensure the correct ns_groups declaration format
+
+    '''
     ret = True
     schema = Schema({'ns_groups':[{'name':str,'ns_instance':object}]})
     try:
@@ -1397,6 +1426,16 @@ def validate_ns_groups_conf(conf):
     return ret
 
 def check_populate_ns_group_yaml(ns_group_conf):
+    '''
+
+    :param ns_group_conf:   Dictionary containing contents of ns_group YAML state declaration
+    :return:  True if YAML format is valid; False otherwise
+
+    Checks the ns_group configuration object to see if it contains any resources.  If not, the user is prompted to
+    allow the input file to be updated with the current NetScaler configuration.  This function creates the capability
+    for a user to automatically build a config YAML from an existing NetScaler configuration.
+
+    '''
     ret = True
 
     if not 'name' in ns_group_conf.keys():
@@ -1425,65 +1464,16 @@ def check_populate_ns_group_yaml(ns_group_conf):
                 ret = False
     return ret
 
-ns_resource_id = {'server':'name',
-                'csaction':'name',
-                'cspolicy':'policyname',
-                'lbvserver':'name',
-                'servicegroup':'servicegroupname'
-                }
-
-ns_group_resource_types = ['name','ns_instance','servers','service_groups','lbvservers','csvservers','cs_policies','cs_actions']
-
-rw_properties = {'server':
-                     [{'nitro':'ipaddress',
-                      'yaml':'ip_address'},
-                      {'nitro':'name',
-                       'yaml':'name'}],
-                 'csaction':
-                     [{'nitro':'name',
-                       'yaml':'name'},
-                      {'nitro':'targetlbvserver',
-                       'yaml':'target_lbvserver'}],
-                 'cspolicy':
-                     [{'nitro':'policyname',
-                       'yaml':'name'},
-                      {'nitro':'rule',
-                       'yaml':'expression'},
-                      {'nitro':'action',
-                       'yaml':'action'}],
-                 'lbvserver':
-                     [{'nitro':'name',
-                       'yaml':'name'},
-                      {'nitro':'ipv46',
-                       'yaml':'vip_address'},
-                      {'nitro':'port',
-                       'yaml':'port'},
-                      {'nitro':'servicetype',
-                       'yaml':'protocol'}],
-                 'csvserver':
-                     [{'nitro':'name',
-                       'yaml':'name'},
-                      {'nitro':'ipv46',
-                       'yaml':'vip_address'},
-                      {'nitro':'port',
-                       'yaml':'port'},
-                      {'nitro':'servicetype',
-                       'yaml':'protocol'}],
-                 'servicegroup':
-                     [{'nitro':'servicegroupname',
-                      'yaml':'name'},
-                      {'nitro':'servicetype',
-                       'yaml':'protocol'}],
-                 'servicegroup_binding':
-                     [{'nitro':'servicegroupname',
-                       'yaml':'name'},
-                      {'nitro':'servername',
-                       'yaml':'server'},
-                      {'nitro':'port',
-                       'yaml':'port'}]
-                 }
 
 def convert_list_of_nitro_objects_to_yaml_config(list_of_nitro_objects):
+    '''
+
+    :param list_of_nitro_objects: List containing NSBaseResource objects
+    :return: List of YAML configuration objects corresponding to list of input objects
+
+    Maps object attributes from NSNitro-based objects to YAML-based configuration syntax
+
+    '''
     return_list = []
 
     if list_of_nitro_objects != None:
@@ -1493,20 +1483,40 @@ def convert_list_of_nitro_objects_to_yaml_config(list_of_nitro_objects):
     return return_list
 
 def assign_if_list_not_empty(dict_obj,key_name,value_list):
+    '''
+
+    :param dict_obj: Dictionary
+    :param key_name: Key name to assign
+    :param value_list: Input list to be assigned if not empty
+    :return: None
+
+    If input list is not empty, it is assigned to the input dictionary as the designated key name's value
+
+    '''
     if len(value_list) > 0:
         dict_obj[key_name] = value_list
 
+
 def get_ns_group_conf_from_ns(nitro,input_ns_group_conf):
+    '''
+
+    :param nitro: NSNitro connection object
+    :param input_ns_group_conf: Configuration dictionary representing an ns_group
+    :return: OrderedDict object with the configuration obtained from the NetScaler
+
+    Queries the NetScaler for the existing configuration and builds a corresponding YAML-based configuration.
+
+    '''
     ns_group_conf = OrderedDict()
     if 'name' in input_ns_group_conf.keys():
         ns_group_conf['name'] = input_ns_group_conf['name']
     ns_group_conf['ns_instance'] = input_ns_group_conf['ns_instance']
     assign_if_list_not_empty(ns_group_conf, 'servers', convert_list_of_nitro_objects_to_yaml_config(get_all_resources_by_type(nitro,'server')))
-    assign_if_list_not_empty(ns_group_conf, 'cs_actions', convert_list_of_nitro_objects_to_yaml_config(get_all_resources_by_type(nitro,'csaction')))
+    assign_if_list_not_empty(ns_group_conf, 'service_groups', convert_list_of_nitro_objects_to_yaml_config(get_all_resources_by_type(nitro,'servicegroup')))
     assign_if_list_not_empty(ns_group_conf, 'lbvservers', convert_list_of_nitro_objects_to_yaml_config(get_all_resources_by_type(nitro,'lbvserver')))
     assign_if_list_not_empty(ns_group_conf, 'csvservers', convert_list_of_nitro_objects_to_yaml_config(get_all_resources_by_type(nitro,'csvserver')))
-    assign_if_list_not_empty(ns_group_conf, 'service_groups', convert_list_of_nitro_objects_to_yaml_config(get_all_resources_by_type(nitro,'servicegroup')))
     assign_if_list_not_empty(ns_group_conf, 'cs_policies', convert_list_of_nitro_objects_to_yaml_config(get_all_resources_by_type(nitro,'cspolicy')))
+    assign_if_list_not_empty(ns_group_conf, 'cs_actions', convert_list_of_nitro_objects_to_yaml_config(get_all_resources_by_type(nitro,'csaction')))
 
     if 'lbvservers' in ns_group_conf.keys():
         for lbvserver in ns_group_conf['lbvservers']:
@@ -1602,9 +1612,8 @@ def get_all_resources_by_type(nitro,resource_type):
     Creates custom url string to get all csaction objects from the Netscaler.  Copies name and targetlbvserver options
     to empty csaction objects to avoid update issues with read-only options present.
     '''
-    from inspect import getmembers
+
     all_resources = []
-    #resource_type = 'csaction'
     url = nitro.get_url() + resource_type
     try:
         resources = nitro.get(url).get_response_field(resource_type)
@@ -1630,28 +1639,9 @@ def get_bindings_for_service_group(nitro, service_group_conf):
     return returned_bindings
 
 
-def connect_nitro (ns_instance_conf):
-    nitro = nitro_service(ns_instance_conf['address'],'http')
-    try:
-        nitro.login(ns_instance_conf['user'],ns_instance_conf['pass'],1800)
-        ret = nitro
-    except nitro_exception as error:
-        log.info('connection to {} failed'.format(ns_instance_conf['address']))
-        ret = False
-    return ret
-
-def disconnect_nitro (nitro):
-    try:
-        nitro.logout()
-        ret = True
-    except nitro_exception as error:
-        log.info('logout from {} failed'.format(nitro.__getattribute__('ipaddress')))
-        ret = False
-
-
 def create_ordered_dict_from_config_yaml(config_yaml):
     return config_yaml
-    ordered_config = {}
+    ordered_config = OrderedDict()
     ordered_config['ns_groups'] = []
     for ns_group in config_yaml['ns_groups']:
         ordered_ns_group_config = {}
@@ -1669,8 +1659,7 @@ def main():
     need_yaml_update = False
 
     if validate_config_yaml(conf):
-        conf = create_ordered_dict_from_config_yaml(conf)
-        backup_config = {}
+        backup_config = OrderedDict()
         backup_config['ns_groups'] = []
         for ns_group in conf['ns_groups']:
             log.info('Processing group {}'.format(ns_group['name']))
@@ -1705,7 +1694,7 @@ def main():
             else:
                 log.info('Connection to NetScaler on {} failed'.format(ns_group['ns_instance']['address']))
         if need_yaml_update:
-            update_yaml(create_ordered_dict_from_config_yaml(conf),sys.argv[1])
+            update_yaml(conf,sys.argv[1])
         update_yaml(create_ordered_dict_from_config_yaml(backup_config),'out.yml')
                     #'backup_ns_config_{}.yml'.format(strftime("%Y%m%d_%H%M%S")))
 
