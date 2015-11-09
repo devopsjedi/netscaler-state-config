@@ -1,0 +1,7 @@
+ns_groups:
+  - name: lb_group01
+
+    ns_instance:
+      address: 192.168.121.50
+      user: nsroot
+      pass: nsroot

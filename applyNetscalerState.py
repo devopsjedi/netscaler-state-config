@@ -6,6 +6,53 @@ import logging
 from schema import Schema, And, Use, Or, Optional, SchemaError
 import socket
 from time import strftime
+import yaml
+import yaml.constructor
+
+try:
+    # included in standard lib from Python 2.7
+    from collections import OrderedDict
+except ImportError:
+    # try importing the backported drop-in replacement
+    # it's available on PyPI
+    from ordereddict import OrderedDict
+
+
+class OrderedDictYAMLLoader(yaml.Loader):
+    """
+    A YAML loader that loads mappings into ordered dictionaries.
+    """
+
+    def __init__(self, *args, **kwargs):
+        yaml.Loader.__init__(self, *args, **kwargs)
+
+        self.add_constructor(u'tag:yaml.org,2002:map', type(self).construct_yaml_map)
+        self.add_constructor(u'tag:yaml.org,2002:omap', type(self).construct_yaml_map)
+
+    def construct_yaml_map(self, node):
+        data = OrderedDict()
+        yield data
+        value = self.construct_mapping(node)
+        data.update(value)
+
+    def construct_mapping(self, node, deep=False):
+        if isinstance(node, yaml.MappingNode):
+            self.flatten_mapping(node)
+        else:
+            raise yaml.constructor.ConstructorError(None, None,
+                'expected a mapping node, but found %s' % node.id, node.start_mark)
+
+        mapping = OrderedDict()
+        for key_node, value_node in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            try:
+                hash(key)
+            except TypeError, exc:
+                raise yaml.constructor.ConstructorError('while constructing a mapping',
+                    node.start_mark, 'found unacceptable key (%s)' % exc, key_node.start_mark)
+            value = self.construct_object(value_node, deep=deep)
+            mapping[key] = value
+        return mapping
 
 LOG_FILENAME = 'applyNetscalerState_{}.log'.format(strftime("%Y%m%d_%H%M%S"))
 
@@ -20,8 +67,23 @@ from nsnitro.nsresources.nscspolicy import NSCSPolicy
 from nsnitro.nsresources.nscsvserver import NSCSVServer
 from nsnitro.nsresources.nscsvservercspolicybinding import NSCSVServerCSPolicyBinding
 from nsnitro.nsresources.nsbaseresource import NSBaseResource
-#from nsnitro.nsresources.nssslvserversslcertkeybinding import NSSSLVServerSSLCertKeyBinding
+#from nitro.nsresources.nssslvserversslcertkeybinding import NSSSLVServerSSLCertKeyBinding
 
+from nssrc.com.citrix.netscaler.nitro.service.nitro_service import nitro_service
+from nssrc.com.citrix.netscaler.nitro.service.nitro_service import nitro_exception
+from nssrc.com.citrix.netscaler.nitro.resource.config.basic.server import server
+
+_mapping_tag = yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG
+'''
+def dict_representer(dumper, data):
+    return dumper.represent_dict(data.iteritems())
+
+def dict_constructor(loader, node):
+    return collections.OrderedDict(loader.construct_pairs(node))
+
+yaml.add_representer(collections.OrderedDict, dict_representer)
+yaml.add_constructor(_mapping_tag, dict_constructor)
+'''
 
 log = logging.getLogger('applyNetscalerState')
 log.setLevel(logging.DEBUG)
@@ -30,6 +92,7 @@ stream.setLevel(logging.DEBUG)
 file = logging.FileHandler(LOG_FILENAME)
 log.addHandler(stream)
 log.addHandler(file)
+
 
 def get_config_yaml(filename):
     '''
@@ -42,15 +105,52 @@ def get_config_yaml(filename):
     try:
         stream = open(filename,"r")
         try:
-            conf = yaml.load(stream)
+            conf = ordered_load(stream,Loader=yaml.SafeLoader)
             ret = conf
         except yaml.YAMLError as error:
             log.info('YAML import failed: {}'.format(error.message))
+            conf = None
+        stream.close()
+    except IOError as error:
+        log.info('Failed to open {}'.format(filename))
+    return conf
+
+
+def update_yaml(conf,filename):
+    ret = None
+    try:
+        stream = open(filename,"w")
+        try:
+            ordered_dump(conf,stream,Dumper=yaml.SafeDumper)
+            ret = True
+        except yaml.YAMLError as error:
+            log.info('YAML export failed: {}'.format(error.message))
+        stream.close()
     except IOError as error:
         log.info('Failed to open {}'.format(filename))
 
-
     return conf
+
+
+def ordered_load(stream, Loader=yaml.Loader, object_pairs_hook=OrderedDict):
+    class OrderedLoader(Loader):
+        pass
+    def construct_mapping(loader, node):
+        loader.flatten_mapping(node)
+        return object_pairs_hook(loader.construct_pairs(node))
+    OrderedLoader.add_constructor(
+        yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+        construct_mapping)
+    return yaml.load(stream, OrderedLoader)
+
+def ordered_dump(data, stream=None, Dumper=yaml.Dumper, **kwds):
+    class OrderedDumper(Dumper):
+        pass
+    def _dict_representer(dumper, data):
+        return dumper.represent_mapping(
+            yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, data.items())
+    OrderedDumper.add_representer(OrderedDict, _dict_representer)
+    return yaml.dump(data, stream, OrderedDumper, default_flow_style=False)
 
 
 def connect(ns_instance):
@@ -157,6 +257,27 @@ def ensure_server_state(nitro, server_conf):
     
     return ret
 
+def create_ns_resource_object(ns_resource_object,object_conf):
+    options = map_yaml_config_to_nitro_object_options(object_conf)
+    ns_resource_object.set_options(object_conf)
+
+def map_yaml_config_to_nitro_object_options(resource_type,object_conf):
+    options = {}
+    for property in rw_properties[resource_type]:
+        nitro_property = property['nitro']
+        yaml_property = property['yaml']
+        options[nitro_property] = object_conf[yaml_property]
+    return options
+
+
+def map_nitro_object_options_to_yaml_config(resource_type,nitro_object):
+    yaml_config = {}
+    for property in rw_properties[resource_type]:
+        nitro_property = property['nitro']
+        yaml_property = property['yaml']
+        yaml_config[yaml_property] = nitro_object.options[nitro_property]
+    return yaml_config
+
 
 def ensure_service_group_state(nitro, service_group_conf):
     '''
@@ -202,29 +323,24 @@ def ensure_service_group_state(nitro, service_group_conf):
             ret = False
         current_service_group= new_service_group
 
-    service_group_binding = NSServiceGroupServerBinding()
-    service_group_binding.set_servicegroupname(service_group_conf['name'])
-    try:
-        bindings = NSServiceGroupServerBinding.get(nitro, service_group_binding)
-    except NSNitroError as error:
-        log.debug('no existing service_group server bindings found for {}'.format(service_group_conf['name']))
-        bindings = None
+    existing_bindings = get_bindings_for_service_group(nitro,service_group_conf)
 
-    if bindings != None:
+    if existing_bindings != None:
         bindings_to_remove = []
-        for binding in bindings:
+        for existing_binding in existing_bindings:
             binding_found = False
-            for server in service_group_conf['servers']:
-                if binding.get_servername() == server['name']:
+            for server_binding_conf in service_group_conf['servers']:
+                if existing_binding == server_binding_conf:
                     binding_found = True
-                    server['bound'] = True
-                    if binding.get_port() != server['port']:
-                        binding.set_port(server['port'])
-                        try:
-                            NSServiceGroupServerBinding.update(nitro, binding)
-                        except NSNitroError as error:
-                            log.debug('NSServiceGroupServerBinding.update() failed: {0}'.format(error))
-                            ret = False
+                    server_binding_conf['bound'] = True
+                elif existing_binding['name'] == server_binding_conf['name']:
+                    updated_binding = create_ns_resource_object(NSServiceGroupServerBinding(),existing_binding)
+                    try:
+                        NSServiceGroupServerBinding.update(nitro, binding)
+                        server_binding_conf['bound'] = True
+                    except NSNitroError as error:
+                        log.debug('NSServiceGroupServerBinding.update() failed: {0}'.format(error))
+                        ret = False
             if not binding_found:
                 binding_to_remove = binding
                 try:
@@ -234,17 +350,19 @@ def ensure_service_group_state(nitro, service_group_conf):
                     ret = False
 
 
-        for server in service_group_conf['servers']:
-            if not server.has_key('bound'):
+        for server_binding_conf in service_group_conf['servers']:
+            if not server_binding_conf.has_key('bound'):
                 new_binding = NSServiceGroupServerBinding()
                 new_binding.set_servicegroupname(service_group_conf['name'])
-                new_binding.set_servername(server['name'])
-                new_binding.set_port(server['port'])
+                new_binding.set_servername(server_binding_conf['name'])
+                new_binding.set_port(server_binding_conf['port'])
                 try:
                     NSServiceGroupServerBinding.add(nitro, new_binding)
                 except NSNitroError as error:
                     log.debug('NSServiceGroupServerBinding.add() failed: {0}'.format(error))
                     ret = False
+            else:
+                server_binding_conf.pop('bound')
 
     
     return ret
@@ -701,6 +819,8 @@ def ensure_cs_actions_state(nitro, cs_actions_conf):
     for cs_action_conf in cs_actions_conf:
         if not cs_action_conf.has_key('existing'):
             ensure_cs_action_state(nitro,cs_action_conf)
+        else:
+            cs_action_conf.pop('existing')
 
     return ret
 
@@ -741,6 +861,8 @@ def ensure_cs_policies_state(nitro,cs_policies_conf):
         if not cs_policy_conf.has_key('existing'):
            if not ensure_cs_policy_state(nitro,cs_policy_conf):
                ret = False
+        else:
+            cs_policy_conf.pop('existing')
 
     return ret
 
@@ -1163,6 +1285,10 @@ def validate_config_yaml(config_from_yaml):
     ret = True
 
     schema = {}
+    schema['ns_groups'] = Schema([{'name':str,Optional('ns_instance'):object,Optional('service_groups'):object,
+                                   Optional('servers'):object, Optional('lbvservers'):object,
+                                   Optional('csvservers'):object, Optional('cs_policies'):object,
+                                   Optional('cs_actions'):object}])
     schema['ns_instance'] = Schema({'user': str,
                                     'pass': str,
                                     'address': Or(And(Use(str), lambda n: socket.inet_aton(n)),And(Use(str), lambda n: socket.gethostbyname(n))) })
@@ -1199,42 +1325,46 @@ def validate_config_yaml(config_from_yaml):
     schema['cs_actions'] = Schema([{'name': str, 'target_lbvserver': And(Use(str),lambda n: n in all_lbvservers)}])
 
 
-    if config_from_yaml.has_key('ns_groups'):
-        conf_items = ['ns_instance','service_groups','servers','lbvservers','csvservers','cs_policies','cs_actions']
-        for group in config_from_yaml['ns_groups']:
-            all_servers = []
-            if group.has_key('servers'):
-                for server in group['servers']:
-                    if server.has_key('name'):
-                        all_servers.append(server['name'])
-            all_service_groups = []
-            if group.has_key('service_groups'):
-                for service_group in group['service_groups']:
-                    if service_group.has_key('name'):
-                        all_service_groups.append(service_group['name'])
-            all_lbvservers = []
-            if group.has_key('lbvservers'):
-                for lbvserver in group['lbvservers']:
-                    if lbvserver.has_key('name'):
-                        all_lbvservers.append(lbvserver['name'])
-            all_cs_policies = []
-            if group.has_key('cs_policies'):
-                for cs_policy in group['cs_policies']:
-                    if cs_policy.has_key('name'):
-                        all_cs_policies.append(cs_policy['name'])
-            all_cs_actions = []
-            if group.has_key('cs_actions'):
-                for cs_action in group['cs_actions']:
-                    if cs_action.has_key('name'):
-                        all_cs_actions.append(cs_action['name'])
-                        
-            for conf_item in conf_items:
-                if group.has_key(conf_item):
-                    if validate_schema(schema[conf_item],group[conf_item]) != None:
-                        log.info('validation of {} in ns_groups: {} failed'.format(conf_item,group['name']))
-                        ret = False
+    if 'ns_groups' in config_from_yaml.keys():
+        if validate_schema(schema['ns_groups'],config_from_yaml['ns_groups']):
+            conf_items = ['ns_instance','service_groups','servers','lbvservers','csvservers','cs_policies','cs_actions']
+            for group in config_from_yaml['ns_groups']:
+                all_servers = []
+                if group.has_key('servers'):
+                    for server in group['servers']:
+                        if server.has_key('name'):
+                            all_servers.append(server['name'])
+                all_service_groups = []
+                if group.has_key('service_groups'):
+                    for service_group in group['service_groups']:
+                        if service_group.has_key('name'):
+                            all_service_groups.append(service_group['name'])
+                all_lbvservers = []
+                if group.has_key('lbvservers'):
+                    for lbvserver in group['lbvservers']:
+                        if lbvserver.has_key('name'):
+                            all_lbvservers.append(lbvserver['name'])
+                all_cs_policies = []
+                if group.has_key('cs_policies'):
+                    for cs_policy in group['cs_policies']:
+                        if cs_policy.has_key('name'):
+                            all_cs_policies.append(cs_policy['name'])
+                all_cs_actions = []
+                if group.has_key('cs_actions'):
+                    for cs_action in group['cs_actions']:
+                        if cs_action.has_key('name'):
+                            all_cs_actions.append(cs_action['name'])
+
+                for conf_item in conf_items:
+                    if group.has_key(conf_item):
+                        if validate_schema(schema[conf_item],group[conf_item]) != None:
+                            log.info('validation of {} in ns_groups: {} failed'.format(conf_item,group['name']))
+                            ret = False
+            else:
+                log.info('yaml format error')
+                ret = False
     else:
-        log.info('ns_groups node not found in yaml')
+        log.info('yaml format error')
         ret = False
 
     return ret
@@ -1256,24 +1386,329 @@ def validate_schema(schema_obj,input):
     return ret
 
 
+def validate_ns_groups_conf(conf):
+    ret = True
+    schema = Schema({'ns_groups':[{'name':str,'ns_instance':object}]})
+    try:
+        schema_obj.validate(input)
+    except SchemaError as error:
+        log.info('validation of {} in ns_groups: {} failed'.format('ns_instance'))
+        ret = False
+    return ret
+
+def check_populate_ns_group_yaml(ns_group_conf):
+    ret = True
+
+    if not 'name' in ns_group_conf.keys():
+        expected_num_keys = 1
+    else:
+        expected_num_keys = 2
+
+    if expected_num_keys == len(ns_group_conf.keys()):
+        received_valid_input = False
+        build_yaml = False
+        while not received_valid_input:
+            user_input = raw_input('Empty NS configuration found in YAML file.  Build YAML from NS? [Y/n]: ')
+            if user_input.lower() in ['y','n','']:
+                received_valid_input = True
+                if user_input.lower() in ['','y']:
+                    build_yaml = True
+        if build_yaml:
+            schema = Schema({'user': str, 'pass': str,
+                             'address': Or(And(Use(str), lambda n: socket.inet_aton(n)),And(Use(str), lambda n: socket.gethostbyname(n))) })
+
+            try:
+                schema.validate(ns_group_conf['ns_instance'])
+                ns_group_conf['build'] = True
+            except SchemaError as error:
+                log.info('validation of {} in ns_group: {} failed'.format('ns_instance',ns_group_conf['name']))
+                ret = False
+    return ret
+
+ns_resource_id = {'server':'name',
+                'csaction':'name',
+                'cspolicy':'policyname',
+                'lbvserver':'name',
+                'servicegroup':'servicegroupname'
+                }
+
+ns_group_resource_types = ['name','ns_instance','servers','service_groups','lbvservers','csvservers','cs_policies','cs_actions']
+
+rw_properties = {'server':
+                     [{'nitro':'ipaddress',
+                      'yaml':'ip_address'},
+                      {'nitro':'name',
+                       'yaml':'name'}],
+                 'csaction':
+                     [{'nitro':'name',
+                       'yaml':'name'},
+                      {'nitro':'targetlbvserver',
+                       'yaml':'target_lbvserver'}],
+                 'cspolicy':
+                     [{'nitro':'policyname',
+                       'yaml':'name'},
+                      {'nitro':'rule',
+                       'yaml':'expression'},
+                      {'nitro':'action',
+                       'yaml':'action'}],
+                 'lbvserver':
+                     [{'nitro':'name',
+                       'yaml':'name'},
+                      {'nitro':'ipv46',
+                       'yaml':'vip_address'},
+                      {'nitro':'port',
+                       'yaml':'port'},
+                      {'nitro':'servicetype',
+                       'yaml':'protocol'}],
+                 'csvserver':
+                     [{'nitro':'name',
+                       'yaml':'name'},
+                      {'nitro':'ipv46',
+                       'yaml':'vip_address'},
+                      {'nitro':'port',
+                       'yaml':'port'},
+                      {'nitro':'servicetype',
+                       'yaml':'protocol'}],
+                 'servicegroup':
+                     [{'nitro':'servicegroupname',
+                      'yaml':'name'},
+                      {'nitro':'servicetype',
+                       'yaml':'protocol'}],
+                 'servicegroup_binding':
+                     [{'nitro':'servicegroupname',
+                       'yaml':'name'},
+                      {'nitro':'servername',
+                       'yaml':'server'},
+                      {'nitro':'port',
+                       'yaml':'port'}]
+                 }
+
+def convert_list_of_nitro_objects_to_yaml_config(list_of_nitro_objects):
+    return_list = []
+
+    if list_of_nitro_objects != None:
+        for nitro_object in list_of_nitro_objects:
+            return_list.append(map_nitro_object_options_to_yaml_config(nitro_object.resourcetype,nitro_object))
+
+    return return_list
+
+def assign_if_list_not_empty(dict_obj,key_name,value_list):
+    if len(value_list) > 0:
+        dict_obj[key_name] = value_list
+
+def get_ns_group_conf_from_ns(nitro,input_ns_group_conf):
+    ns_group_conf = OrderedDict()
+    if 'name' in input_ns_group_conf.keys():
+        ns_group_conf['name'] = input_ns_group_conf['name']
+    ns_group_conf['ns_instance'] = input_ns_group_conf['ns_instance']
+    assign_if_list_not_empty(ns_group_conf, 'servers', convert_list_of_nitro_objects_to_yaml_config(get_all_resources_by_type(nitro,'server')))
+    assign_if_list_not_empty(ns_group_conf, 'cs_actions', convert_list_of_nitro_objects_to_yaml_config(get_all_resources_by_type(nitro,'csaction')))
+    assign_if_list_not_empty(ns_group_conf, 'lbvservers', convert_list_of_nitro_objects_to_yaml_config(get_all_resources_by_type(nitro,'lbvserver')))
+    assign_if_list_not_empty(ns_group_conf, 'csvservers', convert_list_of_nitro_objects_to_yaml_config(get_all_resources_by_type(nitro,'csvserver')))
+    assign_if_list_not_empty(ns_group_conf, 'service_groups', convert_list_of_nitro_objects_to_yaml_config(get_all_resources_by_type(nitro,'servicegroup')))
+    assign_if_list_not_empty(ns_group_conf, 'cs_policies', convert_list_of_nitro_objects_to_yaml_config(get_all_resources_by_type(nitro,'cspolicy')))
+
+    if 'lbvservers' in ns_group_conf.keys():
+        for lbvserver in ns_group_conf['lbvservers']:
+            bindings = get_bindings_for_lbvserver(nitro,lbvserver)
+            if len(bindings) > 0:
+                lbvserver['service_group_bindings'] = bindings
+
+    if 'service_groups' in ns_group_conf.keys():
+        for service_group in ns_group_conf['service_groups']:
+            bindings = get_bindings_for_service_group(nitro,service_group)
+            if len(bindings) > 0:
+                service_group['servers'] = bindings
+
+    if 'csvservers' in ns_group_conf.keys():
+        for csvserver in ns_group_conf['csvservers']:
+            bindings = get_policy_bindings_for_csvserver(nitro,csvserver)
+            if len(bindings) > 0:
+                csvserver['policy_bindings'] = bindings
+            target_lbvserver = get_resource_by_type_and_name(nitro,'csvserver_lbvserver_binding',csvserver['name'])
+            if target_lbvserver != None:
+                csvserver['target_lbvserver'] = target_lbvserver[0].options['lbvserver']
+
+    return ns_group_conf
+
+def get_resource_by_type_and_name(nitro,resource_type,resource_name):
+    matching_resources = []
+    url = nitro.get_url() + resource_type + '/' + resource_name
+    try:
+        response = nitro.get(url).get_response_field(resource_type)
+        if type(response) == list:
+            for item in response:
+                resource = NSBaseResource()
+                resource.resourcetype = resource_type
+                resource.options = item
+                matching_resources.append(resource)
+        else:
+            resource = NSBaseResource()
+            resource.resourcetype = resource_type
+            resource.options = item
+            matching_resources.append(resource)
+    except NSNitroError as error:
+        log.debug('no {} resources found on ns'.format(resource_type))
+        matching_resources = None
+    return matching_resources
+
+def get_bindings_for_lbvserver(nitro,lbvserver_conf):
+    returned_bindings = []
+    resource_type = 'lbvserver_servicegroup_binding'
+    bindings = get_resource_by_type_and_name(nitro,resource_type,lbvserver_conf['name'])
+    if bindings != None:
+        for binding in bindings:
+            returned_bindings.append(binding.options['servicegroupname'])
+    return returned_bindings
+
+
+def get_policy_bindings_for_csvserver(nitro,csvserver_conf):
+    returned_bindings = []
+    resource_type = 'cspolicy_csvserver_binding'
+    bindings = get_resource_by_type_and_name(nitro,resource_type,csvserver_conf['name'])
+    if bindings != None:
+        for binding in bindings:
+            returned_bindings.append({'name':binding.options['policyname'],'priority':int(binding.options['priority'])})
+    return returned_bindings
+
+
+def get_lbvserver_bindings_for_csvserver(nitro,csvserver_conf):
+    returned_bindings = []
+    resource_type = 'csvserver_lbvserver_binding'
+    bindings = get_resource_by_type_and_name(nitro,resource_type,csvserver_conf['name'])
+    if bindings != None:
+        for binding in bindings:
+            returned_bindings.append(binding.options['lbvserver'])
+    return returned_bindings
+
+def build_servers_conf_from_ns(nitro):
+    conf = []
+    all_items = NSServer.get_all(nitro)
+    for item in all_items:
+        conf.append(item.options)
+    return conf
+
+def build_cs_action_conf_from_ns(nitro):
+    conf = []
+    all_items = get_all_cs_actions(nitro)
+    for item in all_items:
+        conf.append(item.options)
+    return conf
+
+def get_all_resources_by_type(nitro,resource_type):
+    '''
+    :param nitro: NSNitro object
+    :return: list of csaction objects
+    Creates custom url string to get all csaction objects from the Netscaler.  Copies name and targetlbvserver options
+    to empty csaction objects to avoid update issues with read-only options present.
+    '''
+    from inspect import getmembers
+    all_resources = []
+    #resource_type = 'csaction'
+    url = nitro.get_url() + resource_type
+    try:
+        resources = nitro.get(url).get_response_field(resource_type)
+    except NSNitroError as error:
+        log.debug('no {} resources found on ns'.format(resource_type))
+        resources = None
+    if resources != None:
+        for resource in resources:
+            new_resource = NSBaseResource()
+            new_resource.resourcetype = resource_type
+            new_resource.set_options(resource)
+            all_resources.append(new_resource)
+    return all_resources
+
+
+def get_bindings_for_service_group(nitro, service_group_conf):
+    returned_bindings = []
+    resource_type = 'servicegroup_servicegroupmember_binding'
+    bindings = get_resource_by_type_and_name(nitro,resource_type,service_group_conf['name'])
+    if bindings != None:
+        for binding in bindings:
+            returned_bindings.append({'name':binding.options['servername'],'port':binding.options['port']})
+    return returned_bindings
+
+
+def connect_nitro (ns_instance_conf):
+    nitro = nitro_service(ns_instance_conf['address'],'http')
+    try:
+        nitro.login(ns_instance_conf['user'],ns_instance_conf['pass'],1800)
+        ret = nitro
+    except nitro_exception as error:
+        log.info('connection to {} failed'.format(ns_instance_conf['address']))
+        ret = False
+    return ret
+
+def disconnect_nitro (nitro):
+    try:
+        nitro.logout()
+        ret = True
+    except nitro_exception as error:
+        log.info('logout from {} failed'.format(nitro.__getattribute__('ipaddress')))
+        ret = False
+
+
+def create_ordered_dict_from_config_yaml(config_yaml):
+    return config_yaml
+    ordered_config = {}
+    ordered_config['ns_groups'] = []
+    for ns_group in config_yaml['ns_groups']:
+        ordered_ns_group_config = {}
+        for resource_type in ns_group_resource_types:
+            if resource_type in ns_group.keys():
+                ordered_ns_group_config[resource_type] = ns_group[resource_type]
+        ordered_config['ns_groups'].append(ordered_ns_group_config)
+
+    return ordered_config
+
 def main():
     log.info('Using config file: {}'.format(sys.argv[1]))
     conf = get_config_yaml(sys.argv[1])
 
+    need_yaml_update = False
+
     if validate_config_yaml(conf):
+        conf = create_ordered_dict_from_config_yaml(conf)
+        backup_config = {}
+        backup_config['ns_groups'] = []
         for ns_group in conf['ns_groups']:
             log.info('Processing group {}'.format(ns_group['name']))
+
             ns_instance = ns_group['ns_instance']
             nitro = connect(ns_instance)
+            #nitro = connect_nitro(ns_instance)
             if nitro.get_sessionid() != None:
-                ensure_servers_state(nitro,ns_group['servers'])
-                ensure_service_groups_state(nitro,ns_group['service_groups'])
-                ensure_lbvservers_state(nitro,ns_group['lbvservers'])
-                ensure_cs_actions_state(nitro,ns_group['cs_actions'])
-                ensure_cs_policies_state(nitro,ns_group['cs_policies'])
-                ensure_csvservers_state(nitro,ns_group['csvservers'])
+                backup_ns_group_conf = get_ns_group_conf_from_ns(nitro,ns_group)
+                backup_config['ns_groups'].append(backup_ns_group_conf)
+                if check_populate_ns_group_yaml(ns_group):
+                    need_yaml_update = True
+                if 'build' in ns_group.keys():
+                    for key in backup_ns_group_conf.keys():
+                        ns_group[key] = backup_ns_group_conf[key]
+                    ns_group.pop('build')
+                else:
+                    if 'servers' in ns_group.keys():
+                        ensure_servers_state(nitro,ns_group['servers'])
+                    if 'service_groups' in ns_group.keys():
+                        ensure_service_groups_state(nitro,ns_group['service_groups'])
+                    if 'lbvservers' in ns_group.keys():
+                        ensure_lbvservers_state(nitro,ns_group['lbvservers'])
+                    if 'cs_actions' in ns_group.keys():
+                        ensure_cs_actions_state(nitro,ns_group['cs_actions'])
+                    if 'cs_policies' in ns_group.keys():
+                        ensure_cs_policies_state(nitro,ns_group['cs_policies'])
+                    if 'csvservers' in ns_group.keys():
+                        ensure_csvservers_state(nitro,ns_group['csvservers'])
                 disconnect(nitro)
+                #disconnect_nitro(nitro)
             else:
                 log.info('Connection to NetScaler on {} failed'.format(ns_group['ns_instance']['address']))
+        if need_yaml_update:
+            update_yaml(create_ordered_dict_from_config_yaml(conf),sys.argv[1])
+        update_yaml(create_ordered_dict_from_config_yaml(backup_config),'out.yml')
+                    #'backup_ns_config_{}.yml'.format(strftime("%Y%m%d_%H%M%S")))
+
 
 if __name__ == "__main__": main()
+
