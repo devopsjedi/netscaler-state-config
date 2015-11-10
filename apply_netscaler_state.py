@@ -18,14 +18,14 @@ from nsnitro.nsresources.nscsvserver import NSCSVServer
 from nsnitro.nsresources.nscsvservercspolicybinding import NSCSVServerCSPolicyBinding
 from nsnitro.nsresources.nsbaseresource import NSBaseResource
 
-log = logging.getLogger('applyNetscalerState')
+log_filename = 'apply_netscaler_state_{}.log'.format(strftime("%Y%m%d_%H%M%S"))
+log = logging.getLogger('apply_netscaler_state')
 log.setLevel(logging.DEBUG)
 stream = logging.StreamHandler()
 stream.setLevel(logging.DEBUG)
-file = logging.FileHandler(LOG_FILENAME)
+file = logging.FileHandler(log_filename)
 log.addHandler(stream)
 log.addHandler(file)
-LOG_FILENAME = 'apply_netscaler_state_{}.log'.format(strftime("%Y%m%d_%H%M%S"))
 
 
 ns_resource_id = {'server':'name',
@@ -1682,48 +1682,48 @@ def create_ordered_dict_from_config_yaml(config_yaml):
 def main():
     log.info('Using config file: {}'.format(sys.argv[1]))
     conf = get_config_yaml(sys.argv[1])
+    if conf is not None:
+        need_yaml_update = False
 
-    need_yaml_update = False
+        # Validate YAML configuration file; Prevents applying invalid configuration
+        if validate_config_yaml(conf):
+            backup_config = OrderedDict()
+            backup_config['ns_groups'] = []
+            for ns_group in conf['ns_groups']:
+                log.info('Processing group {}'.format(ns_group['name']))
 
-    # Validate YAML configuration file; Prevents applying invalid configuration
-    if validate_config_yaml(conf):
-        backup_config = OrderedDict()
-        backup_config['ns_groups'] = []
-        for ns_group in conf['ns_groups']:
-            log.info('Processing group {}'.format(ns_group['name']))
-
-            ns_instance = ns_group['ns_instance']
-            nitro = connect(ns_instance)
-            if nitro.get_sessionid() is not None:
-                # Create backup configuration from NetScaler instance
-                backup_ns_group_conf = get_ns_group_conf_from_ns(nitro,ns_group)
-                backup_config['ns_groups'].append(backup_ns_group_conf)
-                check_populate_ns_group_yaml(ns_group)
-                # Check for empty config or the presence of the 'build' flag in the YAML config file
-                if 'build' in ns_group.keys():
-                    need_yaml_update = True
-                    for key in backup_ns_group_conf.keys():
-                        ns_group[key] = backup_ns_group_conf[key]
-                    ns_group.pop('build')
+                ns_instance = ns_group['ns_instance']
+                nitro = connect(ns_instance)
+                if nitro.get_sessionid() is not None:
+                    # Create backup configuration from NetScaler instance
+                    backup_ns_group_conf = get_ns_group_conf_from_ns(nitro,ns_group)
+                    backup_config['ns_groups'].append(backup_ns_group_conf)
+                    check_populate_ns_group_yaml(ns_group)
+                    # Check for empty config or the presence of the 'build' flag in the YAML config file
+                    if 'build' in ns_group.keys():
+                        need_yaml_update = True
+                        for key in backup_ns_group_conf.keys():
+                            ns_group[key] = backup_ns_group_conf[key]
+                        ns_group.pop('build')
+                    else:
+                        # Iterates through 5 times per NS instance to ensure that dependencies are addressed during state configuration
+                        i = 0
+                        while i <= 5:
+                            # Iterates through YAML config file resource types to apply state for each
+                            for yaml_config_resource_type in yaml_config_resource_types:
+                                if yaml_config_resource_type in ns_group.keys():
+                                    exec('ensure_' + yaml_config_resource_type + '_state(nitro,ns_group[yaml_config_resource_type])')
+                                else:
+                                    exec('ensure_' + yaml_config_resource_type + '_state(nitro,None)')
+                            i += 1
+                    disconnect(nitro)
                 else:
-                    # Iterates through 5 times per NS instance to ensure that dependencies are addressed during state configuration
-                    i = 0
-                    while i <= 5:
-                        # Iterates through YAML config file resource types to apply state for each
-                        for yaml_config_resource_type in yaml_config_resource_types:
-                            if yaml_config_resource_type in ns_group.keys():
-                                exec('ensure_' + yaml_config_resource_type + '_state(nitro,ns_group[yaml_config_resource_type])')
-                            else:
-                                exec('ensure_' + yaml_config_resource_type + '_state(nitro,None)')
-                        i += 1
-                disconnect(nitro)
-            else:
-                log.info('Connection to NetScaler on {} failed'.format(ns_group['ns_instance']['address']))
-        if need_yaml_update:
-            # Updates input config file if 'build' option is selected
-            update_yaml(conf,sys.argv[1])
-        #update_yaml(create_ordered_dict_from_config_yaml(backup_config),'backup.yml')
-        update_yaml(backup_config,'backup_ns_config_{}.yml'.format(strftime("%Y%m%d_%H%M%S")))
+                    log.info('Connection to NetScaler on {} failed'.format(ns_group['ns_instance']['address']))
+            if need_yaml_update:
+                # Updates input config file if 'build' option is selected
+                update_yaml(conf,sys.argv[1])
+            #update_yaml(create_ordered_dict_from_config_yaml(backup_config),'backup.yml')
+            update_yaml(backup_config,'backup_ns_config_{}.yml'.format(strftime("%Y%m%d_%H%M%S")))
 
 
 if __name__ == "__main__": main()
