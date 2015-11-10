@@ -7,7 +7,9 @@ pip install nsnitro
 pip install schema
 ````
 
-This has been tested with Python 2.7.  A best practice would be to run this script against a newly initialized Netscaler rather than one with an existing configuration.  The utility will ensure that the NetScaler state maches the input configuration file so any existing managed resource types on the target NetScaler that are not contained in the configuration file will be removed.  However, it is possible to encode a configuration file with the existing state of a NetScaler and begin managing it with this utility going forward.  Be cautious with this approach- make sure you back it up first.
+This has been tested with Python 2.7.9 and NetScaler 10.5.  The utility will ensure that the NetScaler state maches the input configuration file.  A best practice to begin using this tool to manage your NetScaler would be to use the build.yml sample config file.  This file will be populated based on the existing NetScaler configuration.  Once a configuration file is populated, ongoing changes to the NetScaler configuration can be maintained and applied by this tool.
+
+When running this utility, a log file and backup YAML file will be created.  The log will help track any errors that may have been encountered during processing.  The backup YAML file will contain the state of the NetScaler prior to applying the input YAML configuration file.
 
 # Usage
 The script accepts the filename of a YAML-based configuration ("ns.yml" for example)
@@ -17,7 +19,10 @@ python apply_netscaler_state.py <yaml_filename>
 The YAML input file is validated to ensure compliance with the schema defined below.  Invalid configurations will not be applied.
 
 # Output
-A log file is produced in the working directory each time the script is executed.
+## Log
+A log file named with a timestamp is produced in the working directory each time the script is executed.  
+## Backup YAML Configuration
+A backup of the previous NetScaler configuration is encoded in YAML and saved during execution.  A new file is created during every execution and named with the timestamp.
 
 # Supported States
 ## Servers
@@ -69,6 +74,13 @@ ns_groups:  #Contains a list of one or more NetScaler groups, each with an indep
      address: <nsip_address or hostname>
      user: <ns_user>
      pass: <ns_password>
+    
+### Optional ###
+    build: 
+# If build key is present, the existing configuration is populated from the NetScaler instance above.
+# If the configuration is empty other than the ns_instance declaration, the user will be prompted to create
+# the configuration from the NetScaler.  If 'n' is selected, an empty configuration will be applied.
+# Applying an empty configuration will remove any existing managed resource types from the NetScaler.
     
     service_groups:  # Contains a list of one or more Load Balancing Service Group definitions
       - name: <service_group_name>
