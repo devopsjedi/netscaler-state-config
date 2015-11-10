@@ -5,3 +5,10 @@ ns_groups:
       address: 192.168.121.50
       user: nsroot
       pass: nsroot
+
+# Optional:
+    build: 
+# If build key is present, the existing configuration is populated from the NetScaler instance above.
+# If the configuration is empty other than the ns_instance declaration, the user will be prompted to create
+# the configuration from the NetScaler.  If 'n' is selected, an empty configuration will be applied.
+# Applying an empty configuration will remove any existing managed resource types from the NetScaler.
