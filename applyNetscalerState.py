@@ -38,7 +38,7 @@ ns_resource_id = {'server':'name',
                 'servicegroup':'servicegroupname'
                 }
 
-ns_group_resource_types = ['name','ns_instance','servers','service_groups','lbvservers','csvservers','cs_policies','cs_actions']
+yaml_config_resource_types = ['servers','service_groups','lbvservers','csvservers','cs_actions','cs_policies']
 
 rw_properties = {'server':
                      [{'nitro':'ipaddress',
@@ -116,7 +116,13 @@ def get_config_yaml(filename):
 
 
 def update_yaml(conf,filename):
-    ret = None
+    '''
+
+    :param conf: Dictionary containing YAML-based configuration
+    :param filename: Filename of YAML config file
+    :return: True if export succeeds; False otherwise
+    '''
+    ret = False
     try:
         stream = open(filename,"w")
         try:
@@ -128,7 +134,7 @@ def update_yaml(conf,filename):
     except IOError as error:
         log.info('Failed to open {}'.format(filename))
 
-    return conf
+    return ret
 
 
 def ordered_load(stream, Loader=yaml.Loader, object_pairs_hook=OrderedDict):
@@ -400,18 +406,23 @@ def ensure_service_groups_state(nitro,service_groups_conf):
     - Existing service groups that do not match the config are deleted
     '''
     ret = True
+    if service_groups_conf is not None:
+        for service_group_conf in service_groups_conf:
+            ensure_service_group_state(nitro,service_group_conf)
+        remove_all_existing_service_groups = False
+    else:
+        remove_all_existing_service_groups = True
+
     all_service_groups = NSServiceGroup.get_all(nitro)
     service_groups_to_remove = []
     for service_group in all_service_groups:
         found_match = False
-        for service_group_conf in service_groups_conf:
-            if service_group_conf['name'] == service_group.get_servicegroupname():
-                found_match = True
+        if not remove_all_existing_service_groups:
+            for service_group_conf in service_groups_conf:
+                if service_group_conf['name'] == service_group.get_servicegroupname():
+                    found_match = True
         if not found_match:
             service_groups_to_remove.append(service_group)
-
-    for service_group_conf in service_groups_conf:
-        ensure_service_group_state(nitro,service_group_conf)
 
     for service_group_to_remove in service_groups_to_remove:
         try:
@@ -436,16 +447,21 @@ def ensure_servers_state(nitro,servers_conf):
     - Deletes existing servers on the NS that do not match any server config items
     '''
     ret = True
-    for server_conf in servers_conf:
-        ensure_server_state(nitro,server_conf)
+    if servers_conf is not None:
+        for server_conf in servers_conf:
+            ensure_server_state(nitro,server_conf)
+        remove_all_existing_servers = False
+    else:
+        remove_all_existing_servers = True
 
     all_servers = NSServer.get_all(nitro)
     servers_to_remove = []
     for server in all_servers:
         found_match = False
-        for server_conf in servers_conf:
-            if server_conf['name'] == server.get_name():
-                found_match = True
+        if not remove_all_existing_servers:
+            for server_conf in servers_conf:
+                if server_conf['name'] == server.get_name():
+                    found_match = True
         if not found_match:
             servers_to_remove.append(server)
 
@@ -472,16 +488,21 @@ def ensure_lbvservers_state(nitro,lbvservers_conf):
     - Deletes existing lbvservers on the NS that do not match any lbvserver config items
     '''
     ret = True
-    for lbvserver_conf in lbvservers_conf:
-        ensure_lbvserver_state(nitro,lbvserver_conf)
+    if lbvservers_conf is not None:
+        for lbvserver_conf in lbvservers_conf:
+            ensure_lbvserver_state(nitro,lbvserver_conf)
+        remove_all_existing_lbvservers = False
+    else:
+        remove_all_existing_lbvservers = True
 
     all_lbvservers = NSLBVServer.get_all(nitro)
     lbvservers_to_remove = []
     for lbvserver in all_lbvservers:
         found_match = False
-        for lbvserver_conf in lbvservers_conf:
-            if lbvserver_conf['name'] == lbvserver.get_name():
-                found_match = True
+        if not remove_all_existing_lbvservers:
+            for lbvserver_conf in lbvservers_conf:
+                if lbvserver_conf['name'] == lbvserver.get_name():
+                    found_match = True
         if not found_match:
             lbvservers_to_remove.append(lbvserver)
 
@@ -819,28 +840,25 @@ def ensure_cs_actions_state(nitro, cs_actions_conf):
    - Sends cs_action config items that do not exist on the NS to ensure_cs_action_state()
    '''
     ret = True
+    if cs_actions_conf is not None:
+        for cs_action_conf in cs_actions_conf:
+            ensure_cs_action_state(nitro,cs_action_conf)
+        remove_all_existing_cs_actions = False
+    else:
+        remove_all_existing_cs_actions = True
 
     all_cs_actions = get_all_cs_actions(nitro)
-    cs_actions_to_delete = []
 
     if all_cs_actions is not None:
         for existing_cs_action in all_cs_actions:
             found_match = False
-            for cs_action_conf in cs_actions_conf:
-                if existing_cs_action.options['name'] == cs_action_conf['name']:
-                    found_match = True
-                    ensure_cs_action_state(nitro,cs_action_conf)
-                    cs_action_conf['existing'] = True
+            if not remove_all_existing_cs_actions:
+                for cs_action_conf in cs_actions_conf:
+                    if existing_cs_action.options['name'] == cs_action_conf['name']:
+                        found_match = True
 
             if not found_match:
                 delete_cs_action(nitro,existing_cs_action.options['name'])
-
-
-    for cs_action_conf in cs_actions_conf:
-        if not 'existing' in cs_action_conf.keys():
-            ensure_cs_action_state(nitro,cs_action_conf)
-        else:
-            cs_action_conf.pop('existing')
 
     return ret
 
@@ -859,32 +877,34 @@ def ensure_cs_policies_state(nitro,cs_policies_conf):
     - Sends items in the config list that do not have an existing match to ensure_cs_policy_state()
    '''
     ret = True
+
+    if cs_policies_conf is not None:
+        for cs_policy_conf in cs_policies_conf:
+            ensure_cs_policy_state(nitro,cs_policy_conf)
+        remove_all_existing_cs_policies = False
+    else:
+        remove_all_existing_cs_policies = True
+
     try:
         all_cs_policies = NSCSPolicy().get_all(nitro)
     except NSNitroError as error:
-        pass
+        all_cs_policies = None
 
-    for cs_policy_conf in cs_policies_conf:
-        found_match = False
-        if all_cs_policies:
-            for cs_policy in all_cs_policies:
-                if cs_policy.get_policyname() == cs_policy_conf['name']:
-                    found_match = True
-                    if not ensure_cs_policy_state(nitro,cs_policy_conf):
-                        ret = False
-                    cs_policy_conf['existing'] = True
+    if all_cs_policies is not None:
+        for existing_cs_policy in all_cs_policies:
+            found_match = False
+            if not remove_all_existing_cs_policies:
+                for cs_policy_conf in cs_policies_conf:
+                    if existing_cs_policy.get_policyname() == cs_policy_conf['name']:
+                        found_match = True
+            if not found_match:
+                delete_cs_policy(nitro,existing_cs_policy)
 
-                if not found_match:
-                    delete_cs_policy(nitro,cs_policy)
-
-    for cs_policy_conf in cs_policies_conf:
-        if not 'existing' in cs_policy_conf.keys():
-           if not ensure_cs_policy_state(nitro,cs_policy_conf):
-               ret = False
-        else:
-            cs_policy_conf.pop('existing')
+    else:
+        remove_all_existing_cs_policies = True
 
     return ret
+
 
 def delete_cs_policy(nitro,cs_policy):
     '''
@@ -904,8 +924,6 @@ def delete_cs_policy(nitro,cs_policy):
         log.debug('delete_cs_policy failed: {0}'.format(error))
         ret = False
     return ret
-
-
 
 
 def ensure_cs_policy_state(nitro,cs_policy_conf):
@@ -985,17 +1003,22 @@ def ensure_csvservers_state(nitro,csvservers_conf):
     
     ret = True
     
-
-    for csvserver_conf in csvservers_conf:
-        ensure_csvserver_state(nitro,csvserver_conf)
+    if csvservers_conf is not None:
+        for csvserver_conf in csvservers_conf:
+            ensure_csvserver_state(nitro,csvserver_conf)
+        remove_all_existing_csvservers = False
+    else:
+        remove_all_existing_csvservers = True
 
     all_csvservers = NSCSVServer.get_all(nitro)
     csvservers_to_remove = []
+
     for csvserver in all_csvservers:
         found_match = False
-        for csvserver_conf in csvservers_conf:
-            if csvserver_conf['name'] == csvserver.get_name():
-                found_match = True
+        if not remove_all_existing_csvservers:
+            for csvserver_conf in csvservers_conf:
+                if csvserver_conf['name'] == csvserver.get_name():
+                    found_match = True
         if not found_match:
             csvservers_to_remove.append(csvserver)
 
@@ -1413,7 +1436,6 @@ def validate_ns_groups_conf(conf):
 
 def check_populate_ns_group_yaml(ns_group_conf):
     '''
-
     :param ns_group_conf:   Dictionary containing contents of ns_group YAML state declaration
     :return:  True if YAML format is valid; False otherwise
 
@@ -1607,7 +1629,6 @@ def get_lbvserver_bindings_for_csvserver(nitro,csvserver_conf):
 
 def get_all_resources_by_type(nitro,resource_type):
     '''
-
     :param nitro: NSNitro connection object
     :param resource_type: Name of resource type as defined in the Nitro API
     :return: List of NSBaseResource objects containing the data returned from the NetScaler
@@ -1631,7 +1652,6 @@ def get_all_resources_by_type(nitro,resource_type):
 
 def get_bindings_for_service_group(nitro, service_group_conf):
     '''
-
     :param nitro: NSNitro connection object
     :param csvserver_conf: Service Group object configuration
     :return: List of Service Group Server Binding configurations from NetScaler
@@ -1647,11 +1667,10 @@ def get_bindings_for_service_group(nitro, service_group_conf):
 
 def create_ordered_dict_from_config_yaml(config_yaml):
     '''
-
     :param config_yaml: Dictionary object containing YAML-based configuration
     :return:  OrderedDict object with keys added in the desired sequence.  Used in formatting of YAML export.
     '''
-    return config_yaml
+
     ordered_config = OrderedDict()
     ordered_config['ns_groups'] = []
     for ns_group in config_yaml['ns_groups']:
@@ -1669,6 +1688,7 @@ def main():
 
     need_yaml_update = False
 
+    # Validate YAML configuration file; Prevents applying invalid configuration
     if validate_config_yaml(conf):
         backup_config = OrderedDict()
         backup_config['ns_groups'] = []
@@ -1678,34 +1698,35 @@ def main():
             ns_instance = ns_group['ns_instance']
             nitro = connect(ns_instance)
             if nitro.get_sessionid() is not None:
+                # Create backup configuration from NetScaler instance
                 backup_ns_group_conf = get_ns_group_conf_from_ns(nitro,ns_group)
                 backup_config['ns_groups'].append(backup_ns_group_conf)
                 check_populate_ns_group_yaml(ns_group)
+                # Check for empty config or the presence of the 'build' flag in the YAML config file
                 if 'build' in ns_group.keys():
                     need_yaml_update = True
                     for key in backup_ns_group_conf.keys():
                         ns_group[key] = backup_ns_group_conf[key]
                     ns_group.pop('build')
                 else:
-                    if 'servers' in ns_group.keys():
-                        ensure_servers_state(nitro,ns_group['servers'])
-                    if 'service_groups' in ns_group.keys():
-                        ensure_service_groups_state(nitro,ns_group['service_groups'])
-                    if 'lbvservers' in ns_group.keys():
-                        ensure_lbvservers_state(nitro,ns_group['lbvservers'])
-                    if 'cs_actions' in ns_group.keys():
-                        ensure_cs_actions_state(nitro,ns_group['cs_actions'])
-                    if 'cs_policies' in ns_group.keys():
-                        ensure_cs_policies_state(nitro,ns_group['cs_policies'])
-                    if 'csvservers' in ns_group.keys():
-                        ensure_csvservers_state(nitro,ns_group['csvservers'])
+                    # Iterates through 5 times per NS instance to ensure that dependencies are addressed during state configuration
+                    i = 0
+                    while i <= 5:
+                        # Iterates through YAML config file resource types to apply state for each
+                        for yaml_config_resource_type in yaml_config_resource_types:
+                            if yaml_config_resource_type in ns_group.keys():
+                                exec('ensure_' + yaml_config_resource_type + '_state(nitro,ns_group[yaml_config_resource_type])')
+                            else:
+                                exec('ensure_' + yaml_config_resource_type + '_state(nitro,None)')
+                        i += 1
                 disconnect(nitro)
             else:
                 log.info('Connection to NetScaler on {} failed'.format(ns_group['ns_instance']['address']))
         if need_yaml_update:
+            # Updates input config file if 'build' option is selected
             update_yaml(conf,sys.argv[1])
-        update_yaml(create_ordered_dict_from_config_yaml(backup_config),'backup.yml')
-        #update_yaml(create_ordered_dict_from_config_yaml(backup_config),'backup_ns_config_{}.yml'.format(strftime("%Y%m%d_%H%M%S")))
+        #update_yaml(create_ordered_dict_from_config_yaml(backup_config),'backup.yml')
+        update_yaml(backup_config,'backup_ns_config_{}.yml'.format(strftime("%Y%m%d_%H%M%S")))
 
 
 if __name__ == "__main__": main()
