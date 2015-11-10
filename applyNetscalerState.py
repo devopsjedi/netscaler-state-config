@@ -80,13 +80,16 @@ rw_properties = {'server':
                       'yaml':'name'},
                       {'nitro':'servicetype',
                        'yaml':'protocol'}],
-                 'servicegroup_binding':
-                     [{'nitro':'servicegroupname',
+                 'servicegroup_servicegroupmember_binding':
+                     [{'nitro':'servername',
                        'yaml':'name'},
-                      {'nitro':'servername',
-                       'yaml':'server'},
                       {'nitro':'port',
-                       'yaml':'port'}]
+                       'yaml':'port'}],
+                 'cspolicy_csvserver_binding':
+                     [{'nitro':'policyname',
+                       'yaml':'name'},
+                      {'nitro':'priority',
+                       'yaml':'priority'}]
                  }
 
 
@@ -344,26 +347,22 @@ def ensure_service_group_state(nitro, service_group_conf):
             ret = False
         current_service_group= new_service_group
 
-    existing_bindings = get_bindings_for_service_group(nitro,service_group_conf)
+    #existing_bindings = get_bindings_for_service_group(nitro,service_group_conf)
+    existing_bindings = get_all_resources_by_type_and_name(nitro,'servicegroup_servicegroupmember_binding',service_group_conf['name'])
 
-    if existing_bindings != None:
+    if existing_bindings is not None:
         bindings_to_remove = []
         for existing_binding in existing_bindings:
             binding_found = False
             for server_binding_conf in service_group_conf['servers']:
-                if existing_binding == server_binding_conf:
+                existing_conf = map_nitro_object_options_to_yaml_config('servicegroup_servicegroupmember_binding',existing_binding)
+                if  existing_conf == server_binding_conf:
                     binding_found = True
                     server_binding_conf['bound'] = True
-                elif existing_binding['name'] == server_binding_conf['name']:
-                    updated_binding = create_ns_resource_object(NSServiceGroupServerBinding(),existing_binding)
-                    try:
-                        NSServiceGroupServerBinding.update(nitro, binding)
-                        server_binding_conf['bound'] = True
-                    except NSNitroError as error:
-                        log.debug('NSServiceGroupServerBinding.update() failed: {0}'.format(error))
-                        ret = False
             if not binding_found:
-                binding_to_remove = binding
+                if 'ip' in existing_binding.options.keys():
+                    existing_binding.options.pop('ip')
+                binding_to_remove = NSServiceGroupServerBinding(existing_binding.options)
                 try:
                     NSServiceGroupServerBinding.delete(nitro, binding_to_remove)
                 except NSNitroError as error:
@@ -641,7 +640,7 @@ def ensure_lbvserver_state(nitro, lbvserver_conf):
     for lbvserver_service_group_binding in lbvserver_conf['service_group_bindings']:
         lbvserver_service_group_bindings[lbvserver_service_group_binding] = None
 
-    if bindings != None:
+    if bindings is not None:
         bindings_to_remove = []
         for binding in bindings:
             binding_found = False
@@ -658,7 +657,7 @@ def ensure_lbvserver_state(nitro, lbvserver_conf):
                     ret = False
 
     for lbvserver_service_group_binding in lbvserver_service_group_bindings.keys():
-        if lbvserver_service_group_bindings[lbvserver_service_group_binding] == None:
+        if lbvserver_service_group_bindings[lbvserver_service_group_binding] is None:
             new_binding = NSLBVServerServiceGroupBinding()
             new_binding.set_name(lbvserver_conf['name'])
             new_binding.set_servicegroupname(lbvserver_service_group_binding)
@@ -824,7 +823,7 @@ def ensure_cs_actions_state(nitro, cs_actions_conf):
     all_cs_actions = get_all_cs_actions(nitro)
     cs_actions_to_delete = []
 
-    if all_cs_actions != None:
+    if all_cs_actions is not None:
         for existing_cs_action in all_cs_actions:
             found_match = False
             for cs_action_conf in cs_actions_conf:
@@ -937,7 +936,7 @@ def ensure_cs_policy_state(nitro,cs_policy_conf):
 
 
     need_new_policy = True
-    if existing_cs_policy != None:
+    if existing_cs_policy is not None:
         if existing_cs_policy.options['cspolicytype'] == 'Advanced Policy':
             need_new_policy = False
             update = False
@@ -1136,19 +1135,6 @@ def ensure_csvserver_state(nitro, csvserver_conf):
         check_for_port_and_protocol_match = False
 
         if 'vip_address' in matches_found.keys() and not 'name' in matches_found.keys():
-            '''
-            updated_csvserver = matches_found['vip_address']
-            updated_csvserver.set_newname(csvserver_conf['name'])
-            try:
-                NSCSVServer.rename(nitro, updated_csvserver)
-            except NSNitroError as error:
-                log.debug('NSCSVServer.update() failed: {0}'.format(error))
-                ret = False
-            csvserver = NSCSVServer()
-            csvserver.set_name(csvserver_conf['name'])
-            updated_csvserver = NSCSVServer.get(nitro,csvserver)
-            check_for_port_and_protocol_match = True
-            '''
             csvserver_to_delete = matches_found['vip_address']
             try:
                 NSCSVServer.delete(nitro,csvserver_to_delete)
@@ -1239,19 +1225,17 @@ def ensure_csvserver_state(nitro, csvserver_conf):
         except NSNitroError as error:
             log.debug('NSCSVServer.add() failed: {0}'.format(error))
             ret = False
-        current_csvserver= new_csvserver
 
     existing_csvserver_lbvserver_binding = get_csvserver_lbvserver_binding(nitro,csvserver_conf['name'])
     if 'default_lbvserver' in csvserver_conf.keys():
-        if existing_csvserver_lbvserver_binding != None:
+        if existing_csvserver_lbvserver_binding is not None:
             if existing_csvserver_lbvserver_binding.options['lbvserver'] != csvserver_conf['default_lbvserver']:
                 existing_csvserver_lbvserver_binding.options['lbvserver'] = csvserver_conf['default_lbvserver']
                 update_csvserver_lbvserver_binding(nitro,existing_csvserver_lbvserver_binding)
         else:
             add_csvserver_lbvserver_binding(nitro,csvserver_conf)
-    elif existing_csvserver_lbvserver_binding != None:
+    elif existing_csvserver_lbvserver_binding is not None:
         delete_csvserver_lbvserver_binding(nitro,csvserver_conf['name'])
-
 
     csvserver_policy_binding = NSCSVServerCSPolicyBinding()
     csvserver_policy_binding.set_name(csvserver_conf['name'])
@@ -1262,8 +1246,7 @@ def ensure_csvserver_state(nitro, csvserver_conf):
         existing_bindings = None
 
     for binding in csvserver_conf['policy_bindings']:
-        if existing_bindings != None:
-            bindings_to_remove = []
+        if existing_bindings is not None:
             for existing_binding in existing_bindings:
                 existing_binding_found = False
                 if existing_binding.get_policyname() == binding['name']:
@@ -1289,6 +1272,8 @@ def ensure_csvserver_state(nitro, csvserver_conf):
                 except NSNitroError as error:
                     log.debug('NSCSVServerCSPolicyBinding.add() failed: {0}'.format(error))
                     ret = False
+            else:
+                binding.pop('existing')
 
     
     return ret
@@ -1309,7 +1294,7 @@ def validate_config_yaml(config_from_yaml):
     schema['ns_groups'] = Schema([{'name':str,Optional('ns_instance'):object,Optional('service_groups'):object,
                                    Optional('servers'):object, Optional('lbvservers'):object,
                                    Optional('csvservers'):object, Optional('cs_policies'):object,
-                                   Optional('cs_actions'):object}])
+                                   Optional('cs_actions'):object, Optional('build'):object}])
     schema['ns_instance'] = Schema({'user': str,
                                     'pass': str,
                                     'address': Or(And(Use(str), lambda n: socket.inet_aton(n)),And(Use(str), lambda n: socket.gethostbyname(n))) })
@@ -1378,7 +1363,7 @@ def validate_config_yaml(config_from_yaml):
 
                 for conf_item in conf_items:
                     if conf_item in group.keys():
-                        if validate_schema(schema[conf_item],group[conf_item]) != None:
+                        if validate_schema(schema[conf_item],group[conf_item]) is not None:
                             log.info('validation of {} in ns_groups: {} failed'.format(conf_item,group['name']))
                             ret = False
             else:
@@ -1425,6 +1410,7 @@ def validate_ns_groups_conf(conf):
         ret = False
     return ret
 
+
 def check_populate_ns_group_yaml(ns_group_conf):
     '''
 
@@ -1436,8 +1422,6 @@ def check_populate_ns_group_yaml(ns_group_conf):
     for a user to automatically build a config YAML from an existing NetScaler configuration.
 
     '''
-    ret = True
-
     if not 'name' in ns_group_conf.keys():
         expected_num_keys = 1
     else:
@@ -1461,8 +1445,7 @@ def check_populate_ns_group_yaml(ns_group_conf):
                 ns_group_conf['build'] = True
             except SchemaError as error:
                 log.info('validation of {} in ns_group: {} failed'.format('ns_instance',ns_group_conf['name']))
-                ret = False
-    return ret
+    return None
 
 
 def convert_list_of_nitro_objects_to_yaml_config(list_of_nitro_objects):
@@ -1476,11 +1459,12 @@ def convert_list_of_nitro_objects_to_yaml_config(list_of_nitro_objects):
     '''
     return_list = []
 
-    if list_of_nitro_objects != None:
+    if list_of_nitro_objects is not None:
         for nitro_object in list_of_nitro_objects:
             return_list.append(map_nitro_object_options_to_yaml_config(nitro_object.resourcetype,nitro_object))
 
     return return_list
+
 
 def assign_if_list_not_empty(dict_obj,key_name,value_list):
     '''
@@ -1495,6 +1479,8 @@ def assign_if_list_not_empty(dict_obj,key_name,value_list):
     '''
     if len(value_list) > 0:
         dict_obj[key_name] = value_list
+
+    return None
 
 
 def get_ns_group_conf_from_ns(nitro,input_ns_group_conf):
@@ -1526,22 +1512,32 @@ def get_ns_group_conf_from_ns(nitro,input_ns_group_conf):
 
     if 'service_groups' in ns_group_conf.keys():
         for service_group in ns_group_conf['service_groups']:
-            bindings = get_bindings_for_service_group(nitro,service_group)
+            #bindings = get_bindings_for_service_group(nitro,service_group)
+            bindings = get_all_resources_by_type_and_name(nitro,'servicegroup_servicegroupmember_binding',service_group['name'])
             if len(bindings) > 0:
-                service_group['servers'] = bindings
+                service_group['servers'] = []
+                for binding in bindings:
+                    service_group['servers'].append(map_nitro_object_options_to_yaml_config('servicegroup_servicegroupmember_binding',binding))
 
     if 'csvservers' in ns_group_conf.keys():
         for csvserver in ns_group_conf['csvservers']:
             bindings = get_policy_bindings_for_csvserver(nitro,csvserver)
             if len(bindings) > 0:
                 csvserver['policy_bindings'] = bindings
-            target_lbvserver = get_resource_by_type_and_name(nitro,'csvserver_lbvserver_binding',csvserver['name'])
-            if target_lbvserver != None:
+            target_lbvserver = get_all_resources_by_type_and_name(nitro,'csvserver_lbvserver_binding',csvserver['name'])
+            if target_lbvserver is not None:
                 csvserver['target_lbvserver'] = target_lbvserver[0].options['lbvserver']
 
     return ns_group_conf
 
-def get_resource_by_type_and_name(nitro,resource_type,resource_name):
+
+def get_all_resources_by_type_and_name(nitro,resource_type,resource_name):
+    '''
+    :param nitro: NSNitro connection object
+    :param resource_type: NetScaler resource name as contained in the Nitro API
+    :param resource_name: Name of resource to send in GET request
+    :return: List of NSBaseResponse objects returned from request to NetScaler; Empty list of no objects returned
+    '''
     matching_resources = []
     url = nitro.get_url() + resource_type + '/' + resource_name
     try:
@@ -1563,54 +1559,58 @@ def get_resource_by_type_and_name(nitro,resource_type,resource_name):
     return matching_resources
 
 def get_bindings_for_lbvserver(nitro,lbvserver_conf):
+    '''
+
+    :param nitro: NSNitro connection object
+    :param lbvserver_conf: Load Balancing Virtual Server object configuration
+    :return: List of Service Group names that are bound to the named LBVServer in the input config
+    '''
     returned_bindings = []
     resource_type = 'lbvserver_servicegroup_binding'
-    bindings = get_resource_by_type_and_name(nitro,resource_type,lbvserver_conf['name'])
-    if bindings != None:
+    bindings = get_all_resources_by_type_and_name(nitro,resource_type,lbvserver_conf['name'])
+    if bindings is not None:
         for binding in bindings:
             returned_bindings.append(binding.options['servicegroupname'])
     return returned_bindings
 
 
 def get_policy_bindings_for_csvserver(nitro,csvserver_conf):
+    '''
+
+    :param nitro: NSNitro connection object
+    :param csvserver_conf: Content Switching Virtual Server object configuration
+    :return: List of CS Policy names that are bound to the named CSVServer in the input config
+    '''
     returned_bindings = []
     resource_type = 'cspolicy_csvserver_binding'
-    bindings = get_resource_by_type_and_name(nitro,resource_type,csvserver_conf['name'])
-    if bindings != None:
+    bindings = get_all_resources_by_type_and_name(nitro,resource_type,csvserver_conf['name'])
+    if bindings is not None:
         for binding in bindings:
-            returned_bindings.append({'name':binding.options['policyname'],'priority':int(binding.options['priority'])})
+            returned_bindings.append(map_nitro_object_options_to_yaml_config(resource_type,binding))
     return returned_bindings
 
 
 def get_lbvserver_bindings_for_csvserver(nitro,csvserver_conf):
-    returned_bindings = []
+    '''
+
+    :param nitro: NSNitro connection object
+    :param csvserver_conf: Content Switching Virtual Server object configuration
+    :return: Name of default LBVServer bound to CSVServer in the input config
+    '''
+    ret = None
     resource_type = 'csvserver_lbvserver_binding'
-    bindings = get_resource_by_type_and_name(nitro,resource_type,csvserver_conf['name'])
-    if bindings != None:
-        for binding in bindings:
-            returned_bindings.append(binding.options['lbvserver'])
-    return returned_bindings
+    bindings = get_all_resources_by_type_and_name(nitro,resource_type,csvserver_conf['name'])
+    if bindings is not None:
+        ret = binding.options['lbvserver']
+    return ret
 
-def build_servers_conf_from_ns(nitro):
-    conf = []
-    all_items = NSServer.get_all(nitro)
-    for item in all_items:
-        conf.append(item.options)
-    return conf
-
-def build_cs_action_conf_from_ns(nitro):
-    conf = []
-    all_items = get_all_cs_actions(nitro)
-    for item in all_items:
-        conf.append(item.options)
-    return conf
 
 def get_all_resources_by_type(nitro,resource_type):
     '''
-    :param nitro: NSNitro object
-    :return: list of csaction objects
-    Creates custom url string to get all csaction objects from the Netscaler.  Copies name and targetlbvserver options
-    to empty csaction objects to avoid update issues with read-only options present.
+
+    :param nitro: NSNitro connection object
+    :param resource_type: Name of resource type as defined in the Nitro API
+    :return: List of NSBaseResource objects containing the data returned from the NetScaler
     '''
 
     all_resources = []
@@ -1620,7 +1620,7 @@ def get_all_resources_by_type(nitro,resource_type):
     except NSNitroError as error:
         log.debug('no {} resources found on ns'.format(resource_type))
         resources = None
-    if resources != None:
+    if resources is not None:
         for resource in resources:
             new_resource = NSBaseResource()
             new_resource.resourcetype = resource_type
@@ -1630,16 +1630,27 @@ def get_all_resources_by_type(nitro,resource_type):
 
 
 def get_bindings_for_service_group(nitro, service_group_conf):
+    '''
+
+    :param nitro: NSNitro connection object
+    :param csvserver_conf: Service Group object configuration
+    :return: List of Service Group Server Binding configurations from NetScaler
+    '''
     returned_bindings = []
     resource_type = 'servicegroup_servicegroupmember_binding'
-    bindings = get_resource_by_type_and_name(nitro,resource_type,service_group_conf['name'])
-    if bindings != None:
+    bindings = get_all_resources_by_type_and_name(nitro,resource_type,service_group_conf['name'])
+    if bindings is not None:
         for binding in bindings:
-            returned_bindings.append({'name':binding.options['servername'],'port':binding.options['port']})
+            returned_bindings.append(map_nitro_object_options_to_yaml_config(resource_type,binding))
     return returned_bindings
 
 
 def create_ordered_dict_from_config_yaml(config_yaml):
+    '''
+
+    :param config_yaml: Dictionary object containing YAML-based configuration
+    :return:  OrderedDict object with keys added in the desired sequence.  Used in formatting of YAML export.
+    '''
     return config_yaml
     ordered_config = OrderedDict()
     ordered_config['ns_groups'] = []
@@ -1666,13 +1677,12 @@ def main():
 
             ns_instance = ns_group['ns_instance']
             nitro = connect(ns_instance)
-            #nitro = connect_nitro(ns_instance)
-            if nitro.get_sessionid() != None:
+            if nitro.get_sessionid() is not None:
                 backup_ns_group_conf = get_ns_group_conf_from_ns(nitro,ns_group)
                 backup_config['ns_groups'].append(backup_ns_group_conf)
-                if check_populate_ns_group_yaml(ns_group):
-                    need_yaml_update = True
+                check_populate_ns_group_yaml(ns_group)
                 if 'build' in ns_group.keys():
+                    need_yaml_update = True
                     for key in backup_ns_group_conf.keys():
                         ns_group[key] = backup_ns_group_conf[key]
                     ns_group.pop('build')
@@ -1690,13 +1700,12 @@ def main():
                     if 'csvservers' in ns_group.keys():
                         ensure_csvservers_state(nitro,ns_group['csvservers'])
                 disconnect(nitro)
-                #disconnect_nitro(nitro)
             else:
                 log.info('Connection to NetScaler on {} failed'.format(ns_group['ns_instance']['address']))
         if need_yaml_update:
             update_yaml(conf,sys.argv[1])
-        update_yaml(create_ordered_dict_from_config_yaml(backup_config),'out.yml')
-                    #'backup_ns_config_{}.yml'.format(strftime("%Y%m%d_%H%M%S")))
+        update_yaml(create_ordered_dict_from_config_yaml(backup_config),'backup.yml')
+        #update_yaml(create_ordered_dict_from_config_yaml(backup_config),'backup_ns_config_{}.yml'.format(strftime("%Y%m%d_%H%M%S")))
 
 
 if __name__ == "__main__": main()
